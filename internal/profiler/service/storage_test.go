@@ -59,6 +59,37 @@ func TestBuildProfileAggregationQueryAddsTracerIDOnce(t *testing.T) {
 	}
 }
 
+func TestNormalizeProfileAggregationFieldUsesKeywordVariant(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{name: "id", field: "id", want: profileFieldTracerID + ".keyword"},
+		{name: "profile type", field: profileFieldProfileType, want: profileFieldProfileType + ".keyword"},
+		{name: "region", field: profileFieldRegion, want: profileFieldRegion + ".keyword"},
+		{name: "hostname", field: profileFieldHostname, want: profileFieldHostname + ".keyword"},
+		{name: "tracer name", field: profileFieldTracerName, want: profileFieldTracerName + ".keyword"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeProfileAggregationField(tt.field)
+			if err != nil {
+				t.Fatalf("normalizeProfileAggregationField(%q): %v", tt.field, err)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeProfileAggregationField(%q) = %q, want %q", tt.field, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeProfileAggregationFieldRejectsUnknown(t *testing.T) {
+	if _, err := normalizeProfileAggregationField("flamedata"); err == nil {
+		t.Fatal("normalizeProfileAggregationField accepted an unknown field")
+	}
+}
+
 func TestBuildProfileAggregationQueryFiltersByRegion(t *testing.T) {
 	query := buildProfileAggregationQuery(&SearchFilter{
 		Region:   "cn-beijing",

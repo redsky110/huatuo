@@ -1,4 +1,4 @@
-// Copyright 2025 The HuaTuo Authors
+// Copyright 2025, 2026 The HuaTuo Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,11 +22,12 @@ import (
 
 const (
 	// ProfileTypeCpuSample is the profile type for CPU sample.
-	ProfileTypeCpuSample       = "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
-	ProfileTypeOffCpuSample    = "process_offcpu:offcpu:nanoseconds:offcpu:nanoseconds"
-	ProfileTypeMemSample       = "memory:alloc_space:bytes:space:bytes"
-	ProfileTypeLockCountSample = "process_lock:lock:count:lock:count"
-	ProfileTypeLockTimeSample  = "process_lock:lock:nanoseconds:lock:nanoseconds"
+	ProfileTypeCpuSample        = "process_cpu:cpu:nanoseconds:cpu:nanoseconds"
+	ProfileTypeOffCpuSample     = "process_offcpu:offcpu:nanoseconds:offcpu:nanoseconds"
+	ProfileTypeMemSample        = "memory:alloc_space:bytes:space:bytes"
+	ProfileTypeLockCountSample  = "process_lock:lock:count:lock:count"
+	ProfileTypeLockTimeSample   = "process_lock:lock:nanoseconds:lock:nanoseconds"
+	ProfileTypeIrqTracingSample = "irq_tracing:irq:count:irq:count"
 )
 
 // MetadataCollection is the storage collection name for profiling metadata documents.

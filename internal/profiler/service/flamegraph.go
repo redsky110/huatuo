@@ -125,18 +125,32 @@ func (s *Service) SelectMergeStacktraces(ctx context.Context, req *querierv1.Sel
 	}
 
 	// merge profileDocs
+	return mergeStacktraces(profileDocs, profileTypes[1])
+}
+
+// mergeStacktraces merges the profile documents into a single flame graph.
+// nmissed accumulates the samples dropped during collection (sample budget or
+// full counts maps) across the merged documents. The vendored response proto
+// has no field to carry the truncated marker, so the dropped samples are
+// reported in the log; serving the partial graph beats failing every query
+// that touches a budgeted tracer.
+func mergeStacktraces(profileDocs []*ProfileDocument, sampleType string) (*querierv1.SelectMergeStacktracesResponse, error) {
 	var profilesMerge pprof.ProfileMerge
+	var nmissed uint64
 	for _, profileDoc := range profileDocs {
 		profile := &profileDoc.TracerData.Flamedata.Profile
 		if err := profilesMerge.Merge(profile); err != nil {
 			return nil, fmt.Errorf("merge profile: %w", err)
 		}
+		nmissed += profileDoc.TracerData.NMissed
+	}
+	if nmissed > 0 {
+		log.WithField("dropped", nmissed).Warn("profile merge is incomplete: samples were dropped during collection")
 	}
 	profile := profilesMerge.Profile()
 	if profile == nil {
 		return nil, ErrProfilesAbsent
 	}
-	sampleType := profileTypes[1]
 
 	// convert profilev1.Profile to phlaremodel.Tree
 	phlaremodelTree := new(phlaremodel.Tree)

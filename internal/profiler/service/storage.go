@@ -76,6 +76,10 @@ type ProfileDocument struct {
 			ProfileType string            `json:"profile_type,omitempty"`
 			Profile     profilev1.Profile `json:"profile,omitempty"`
 		} `json:"flamedata,omitempty"`
+		// NMissed is set by tracers with a first-N sample budget (e.g.
+		// irq_tracing): a non-zero value means samples were dropped and the
+		// flame graph is incomplete.
+		NMissed uint64 `json:"nmissed,omitempty"`
 		// others
 	} `json:"tracer_data,omitempty"`
 }
@@ -353,9 +357,12 @@ func buildProfileAggregationQuery(filter *SearchFilter) driver.Query {
 }
 
 func normalizeProfileAggregationField(field string) (string, error) {
+	// ES maps the index's string fields as text with a keyword sub-field;
+	// aggregations must target the keyword variant or ES rejects them
+	// because fielddata is disabled on text fields.
 	switch field {
 	case "id":
-		return profileFieldTracerID, nil
+		return profileFieldTracerID + ".keyword", nil
 	case profileFieldRegion,
 		profileFieldHostname,
 		profileFieldContainerHostname,
@@ -367,7 +374,7 @@ func normalizeProfileAggregationField(field string) (string, error) {
 		profileFieldTracerID,
 		profileFieldTracerType,
 		profileFieldProfileType:
-		return field, nil
+		return field + ".keyword", nil
 	default:
 		return "", fmt.Errorf("invalid aggregation field: %q", field)
 	}
