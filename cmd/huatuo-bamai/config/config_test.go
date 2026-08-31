@@ -364,6 +364,26 @@ func loadConfigDefaults(t *testing.T) *Config {
 	return Get().Clone()
 }
 
+func TestIRQTracingRateLimitDefault(t *testing.T) {
+	cfg := loadConfigDefaults(t)
+	if got := cfg.AutoTracing.IrqTracing.MaxEventsPerSecond; got != 1000 {
+		t.Fatalf("AutoTracing.IrqTracing.MaxEventsPerSecond = %d, want 1000", got)
+	}
+}
+
+func TestIRQTracingConfigValidatedWhenBlacklisted(t *testing.T) {
+	path := writeConfigFile(t, t.TempDir(), "huatuo-bamai.conf", `
+BlackList = ["irq_tracing"]
+
+[AutoTracing.IrqTracing]
+    Interval = -1
+`)
+	err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "sampling interval") {
+		t.Fatalf("Load() error = %v, want invalid irq tracing interval", err)
+	}
+}
+
 func TestConfigCloneDoesNotShareMutableReferences(t *testing.T) {
 	source := &Config{}
 	testutils.PopulateCloneSource(t, source)

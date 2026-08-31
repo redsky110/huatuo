@@ -676,7 +676,36 @@ cgroup 设置等仅在启动阶段读取的配置会被持久化，但需重启 
 
   **说明**：控制输出数据量，避免单次事件产生过多诊断信息。
 
-#### 7.6 已知问题过滤（IssuesList）
+#### 7.6 IRQTracing 自动追踪
+
+该模块检测单个 CPU 的 irq+softirq 利用率异常，并调用 `irqtracing` 采集
+softirq source 和 victim 调用栈。
+
+```bash
+[AutoTracing.IrqTracing]
+    Interval = 2
+    RunTracingToolTimeout = 3
+    IntervalTracing = 300
+    MaxEventsPerSecond = 1000
+    SpikeMinCPUs = 3
+    SpikeAbsDeltaThreshold = 20
+    SpikeRelIncreasePct = 30
+    SustainedConsecutiveIntervals = 10
+    SustainedUtilThreshold = 80
+```
+
+- **Interval**：`/proc/stat` 中每 CPU irq+softirq 利用率的采样间隔，默认 2s。
+- **RunTracingToolTimeout**：单次 `irqtracing` 采集时长，默认 3s。
+- **IntervalTracing**：两次触发之间的最小间隔，默认 300s。
+- **MaxEventsPerSecond**：每秒采集的 source 和 victim 栈样本总上限，默认
+  1000。守护进程将额度尽量均分给 `softirq_raise` 和 `softirq_entry`；默认
+  每条流 500/s。该值必须至少为 2。
+- **SpikeMinCPUs**、**SpikeAbsDeltaThreshold** 和
+  **SpikeRelIncreasePct**：控制多 CPU irq+softirq 利用率突增规则。
+- **SustainedConsecutiveIntervals** 和 **SustainedUtilThreshold**：控制单 CPU
+  irq+softirq 持续高利用率规则。
+
+#### 7.7 已知问题过滤（IssuesList）
 
 ```bash
 # Autotracing configuration.

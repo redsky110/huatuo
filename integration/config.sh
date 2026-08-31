@@ -105,7 +105,7 @@ write_sched_tick_config_with_threshold() {
 	local interval_threshold=$1
 
 	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
-BlackList = ["arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "metax_gpu", "mountpoint_perm", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "oom", "ras", "runqlat", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit"]
+BlackList = ["arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "irq_tracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "metax_gpu", "mountpoint_perm", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "oom", "ras", "runqlat", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit"]
 
 [HTTPServer.Auth]
     BearerToken = "integration-node-token"
@@ -163,6 +163,33 @@ BlackList = ["arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle", "cpusys", "
     RunTracingToolTimeout = 1
     MaxProcDump = 1
     MaxFilesPerProcDump = 1
+
+[Storage.LocalFile]
+    Path = "${HUATUO_BAMAI_TEST_TMPDIR}/events"
+EOF
+}
+
+# The irqtracing test controls proc/stat and the Toolstream subprocess.
+write_irqtracing_autotracing_config() {
+	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
+BlackList = ["arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "metax_gpu", "mountpoint_perm", "mthreads_gpu", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "oom", "ras", "runqlat", "sched_tick", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit", "tracing_status"]
+
+[HTTPServer]
+    ListenAddress = "127.0.0.1:${IRQTRACING_API_PORT}"
+
+[HTTPServer.Auth]
+    BearerToken = "integration-node-token"
+
+[AutoTracing.IrqTracing]
+    Interval = 1
+    IntervalTracing = 60
+    RunTracingToolTimeout = 1
+    MaxEventsPerSecond = 1000
+    SpikeMinCPUs = 1
+    SpikeAbsDeltaThreshold = 1
+    SpikeRelIncreasePct = 1
+    SustainedConsecutiveIntervals = 10
+    SustainedUtilThreshold = 100
 
 [Storage.LocalFile]
     Path = "${HUATUO_BAMAI_TEST_TMPDIR}/events"

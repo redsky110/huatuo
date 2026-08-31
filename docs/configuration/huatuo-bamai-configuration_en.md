@@ -680,7 +680,39 @@ This module detects sudden memory usage spikes on the host and automatically cap
 
   Default: 10.
 
-#### 7.6 Known Issue Filtering (IssuesList)
+#### 7.6 IRQTracing AutoTracing
+
+This module detects abnormal irq+softirq utilization on one CPU and invokes
+`irqtracing` to collect softirq source and victim stacks.
+
+```bash
+[AutoTracing.IrqTracing]
+    Interval = 2
+    RunTracingToolTimeout = 3
+    IntervalTracing = 300
+    MaxEventsPerSecond = 1000
+    SpikeMinCPUs = 3
+    SpikeAbsDeltaThreshold = 20
+    SpikeRelIncreasePct = 30
+    SustainedConsecutiveIntervals = 10
+    SustainedUtilThreshold = 80
+```
+
+- **Interval**: Sampling interval for per-CPU irq+softirq utilization from
+  `/proc/stat`. Default: 2s.
+- **RunTracingToolTimeout**: Duration of one `irqtracing` collection. Default:
+  3s.
+- **IntervalTracing**: Minimum interval between triggers. Default: 300s.
+- **MaxEventsPerSecond**: Combined source and victim stack-sample limit per
+  second. Default: 1000. The daemon divides it as evenly as possible between
+  `softirq_raise` and `softirq_entry`; the default is 500 events/s per stream.
+  The value must be at least 2.
+- **SpikeMinCPUs**, **SpikeAbsDeltaThreshold**, and **SpikeRelIncreasePct**:
+  Configure the multi-CPU irq+softirq spike rule.
+- **SustainedConsecutiveIntervals** and **SustainedUtilThreshold**: Configure
+  the sustained high irq+softirq utilization rule for one CPU.
+
+#### 7.7 Known Issue Filtering (IssuesList)
 
 ```bash
 # Autotracing configuration.
