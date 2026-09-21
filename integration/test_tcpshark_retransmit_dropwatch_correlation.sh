@@ -27,7 +27,7 @@ bpf_tool_setup tcpshark tcp_retransmit tcp-retrans-dropwatch-correlation
 
 readonly CORR_TCPSHARK_BIN=${TOOL_BIN}
 readonly CORR_BPF_DIR="${ROOT_DIR}/_output/bpf"
-readonly CORR_DROPWATCH_BPF="${CORR_BPF_DIR}/dropwatch.o"
+readonly CORR_DROPWATCH_BPF="${CORR_BPF_DIR}/net_dropwatch.o"
 readonly CORR_OUTPUT=${TOOL_OUT}
 readonly CORR_ERROR=${TOOL_ERR}
 readonly CORR_MATCHED_EVENT="${TOOL_WORK_DIR}/matched-event.json"
@@ -148,5 +148,6 @@ corr_tcpshark_pid=""
 ((tcpshark_status == 0)) \
 	|| fatal "tcpshark exited with status ${tcpshark_status}"
 
+assert_kernel_observation_timestamps "${CORR_MATCHED_EVENT}"
 assert_log_has_no_failure "${CORR_ERROR}" "tcpshark"
 log_info "correlated event: $(< "${CORR_MATCHED_EVENT}")"

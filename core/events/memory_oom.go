@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/ccfos/huatuo/internal/bpf"
 	"github.com/ccfos/huatuo/internal/bpf/abi"
@@ -27,13 +26,14 @@ import (
 	"github.com/ccfos/huatuo/internal/cgroups/subsystem"
 	"github.com/ccfos/huatuo/internal/log"
 	"github.com/ccfos/huatuo/internal/pod"
+	"github.com/ccfos/huatuo/internal/timeutil"
 	"github.com/ccfos/huatuo/internal/tracing"
 	"github.com/ccfos/huatuo/internal/utils/bytesutil"
 	"github.com/ccfos/huatuo/internal/utils/kernaddr"
 	"github.com/ccfos/huatuo/pkg/metric"
 )
 
-//go:generate $BPF_COMPILE $BPF_INCLUDE -s $BPF_DIR/oom.c -o $BPF_DIR/oom.o
+//go:generate $BPF_COMPILE $BPF_INCLUDE -s $BPF_DIR/memory_oom.c -o $BPF_DIR/memory_oom.o
 
 type OOMActor struct {
 	MemoryCgroupCSSAddr string                   `json:"memory_cgroup_css_addr"`
@@ -66,7 +66,7 @@ var (
 )
 
 func init() {
-	tracing.RegisterEventTracing("oom", newOOMCollector)
+	tracing.RegisterEventTracing("memory_oom", newOOMCollector)
 }
 
 func newOOMCollector() (*tracing.EventTracingAttr, error) {
@@ -118,7 +118,7 @@ func (c *oomCollector) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	reader, err := b.AttachAndEventPipe(childCtx, "oom_perf_events", 8192)
+	reader, err := b.AttachAndEventPipe(childCtx, "oom_perf_events", bpf.DefaultPerfEventBufferBytes)
 	if err != nil {
 		return err
 	}
@@ -158,8 +158,8 @@ func (c *oomCollector) Start(ctx context.Context) error {
 			mutex.Unlock()
 
 			if err := tracing.Save(&tracing.WriteRequest{
-				TracerName:        "oom",
-				ObservedTimestamp: time.Now().UTC(),
+				TracerName:        "memory_oom",
+				ObservedTimestamp: timeutil.Now(),
 				TracerData:        oomData,
 				ContainerID:       oomData.Victim.ContainerID,
 			}); err != nil {

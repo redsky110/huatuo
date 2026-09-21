@@ -17,6 +17,9 @@ package types
 import (
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/ccfos/huatuo/internal/timeutil"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -29,34 +32,34 @@ func TestTCPRetransmitTracingRoundTrip(t *testing.T) {
 		{
 			name: "full event",
 			ev: &TCPRetransmitTracing{
-				ObservedTimestamp:   "2026-07-08T09:19:52.042035335Z",
-				KtimeNS:             123456789,
-				TCPReason:           "reorder_prone_fast",
-				Source:              "events",
-				Comm:                "kube-apiserver",
-				PID:                 1234,
-				ContainerID:         "abc123",
-				MemoryCgroupCSSAddr: "0xffff888012345678",
-				NetNamespaceCookie:  0x2000,
-				NetNamespaceInum:    4026531992,
-				TCPSaddr:            "10.0.0.1",
-				TCPDaddr:            "10.0.0.2",
-				TCPSport:            6443,
-				TCPDport:            58244,
-				TCPState:            "ESTABLISHED",
-				Phase:               "data",
-				EventType:           "tcp_retransmit_skb",
-				CaState:             3,
-				IcskRetransmits:     0,
-				IcskPending:         6,
-				ReordSeen:           10,
-				DsackDups:           2,
-				TCPSeq:              123456,
-				TCPAckSeq:           789012,
-				TCPEndSeq:           123999,
-				TCPFlags:            "ACK|FIN",
-				SkbAddr:             "0xffff888012345678",
-				DropLocation:        "unknown",
+				ObservedTimestamp:       timeutil.Timestamp{Time: time.Date(2026, 7, 8, 9, 19, 52, 42035335, time.UTC)},
+				KernelObservedTimestamp: &timeutil.Timestamp{Time: time.Date(2026, 7, 8, 9, 19, 52, 0, time.UTC)},
+				TCPReason:               "fast_retransmit",
+				Source:                  "events",
+				Comm:                    "kube-apiserver",
+				PID:                     1234,
+				ContainerID:             "abc123",
+				MemoryCgroupCSSAddr:     "0xffff888012345678",
+				NetNamespaceCookie:      0x2000,
+				NetNamespaceInum:        4026531992,
+				TCPSaddr:                "10.0.0.1",
+				TCPDaddr:                "10.0.0.2",
+				TCPSport:                6443,
+				TCPDport:                58244,
+				TCPState:                "ESTABLISHED",
+				Phase:                   "data",
+				EventType:               "tcp_retransmit_skb",
+				CaState:                 3,
+				IcskRetransmits:         0,
+				IcskPending:             6,
+				ReordSeen:               10,
+				DsackDups:               2,
+				TCPSeq:                  123456,
+				TCPAckSeq:               789012,
+				TCPEndSeq:               123999,
+				TCPFlags:                "ACK|FIN",
+				SkbAddr:                 "0xffff888012345678",
+				DropLocation:            "unknown",
 				CorrelationReasons: []CorrelationReason{
 					CorrelationReasonStartupHistoryIncomplete,
 					CorrelationReasonPerfEventsLost,
@@ -71,7 +74,7 @@ func TestTCPRetransmitTracingRoundTrip(t *testing.T) {
 		{
 			name: "minimal event",
 			ev: &TCPRetransmitTracing{
-				ObservedTimestamp: "2026-07-08T00:00:00Z",
+				ObservedTimestamp: timeutil.Timestamp{Time: time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)},
 				TCPReason:         "RTO",
 				TCPSaddr:          "::",
 				TCPDaddr:          "::",
@@ -85,7 +88,7 @@ func TestTCPRetransmitTracingRoundTrip(t *testing.T) {
 		{
 			name: "synack zero sequence",
 			ev: &TCPRetransmitTracing{
-				ObservedTimestamp: "2026-07-08T00:00:00Z",
+				ObservedTimestamp: timeutil.Timestamp{Time: time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)},
 				TCPReason:         "RTO",
 				TCPSaddr:          "10.0.0.1",
 				TCPDaddr:          "10.0.0.2",
@@ -99,7 +102,7 @@ func TestTCPRetransmitTracingRoundTrip(t *testing.T) {
 		{
 			name: "tlp event",
 			ev: &TCPRetransmitTracing{
-				ObservedTimestamp: "2026-07-08T00:00:00Z",
+				ObservedTimestamp: timeutil.Timestamp{Time: time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)},
 				TCPReason:         "TLP",
 				TCPSaddr:          "10.0.0.1",
 				TCPDaddr:          "10.0.0.2",
@@ -135,7 +138,7 @@ func TestTCPRetransmitTracingRoundTrip(t *testing.T) {
 
 func TestTCPRetransmitTracingOmitEmpty(t *testing.T) {
 	ev := &TCPRetransmitTracing{
-		ObservedTimestamp: "2026-07-08T00:00:00Z",
+		ObservedTimestamp: timeutil.Timestamp{Time: time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)},
 		TCPReason:         "RTO",
 		TCPSaddr:          "10.0.0.1",
 		TCPDaddr:          "10.0.0.2",
@@ -186,7 +189,7 @@ func TestTCPRetransmitTracingOmitEmpty(t *testing.T) {
 	}
 
 	omitFields := []string{
-		"ktime_ns",
+		"kernel_observed_ns", "kernel_observed_timestamp",
 		"container_id", "memory_cgroup_css_addr", "net_namespace_cookie", "net_namespace_inum",
 		"reord_seen", "dsack_dups", "tcp_end_seq", "tcp_flags",
 		"skb_addr", "drop_location", "correlation_reasons",
@@ -233,7 +236,6 @@ func TestTCPRetransmitReasonString(t *testing.T) {
 	}{
 		{name: "rto", reason: TCPRetransmitReasonRTO, want: "RTO"},
 		{name: "fast", reason: TCPRetransmitReasonFast, want: "fast_retransmit"},
-		{name: "reorder prone", reason: TCPRetransmitReasonReorderProneFast, want: "reorder_prone_fast"},
 		{name: "tlp", reason: TCPRetransmitReasonTLP, want: "TLP"},
 		{name: "spurious", reason: TCPRetransmitReasonSpurious, want: "spurious"},
 		{name: "unknown", reason: TCPRetransmitReasonUnknown, want: "unknown"},
@@ -247,5 +249,29 @@ func TestTCPRetransmitReasonString(t *testing.T) {
 				t.Errorf("TCPRetransmitReason(%d).String() = %q, want %q", tt.reason, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTCPRetransmitJSONExcludesMonotonicClock(t *testing.T) {
+	event := TCPRetransmitTracing{
+		ObservedTimestamp:       timeutil.Timestamp{Time: time.Date(2026, 9, 15, 2, 0, 1, 0, time.UTC)},
+		KernelObservedTimestamp: &timeutil.Timestamp{Time: time.Date(2026, 9, 15, 2, 0, 0, 0, time.UTC)},
+		KernelObservedNS:        123456789,
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["kernel_observed_timestamp"] != event.KernelObservedTimestamp.FormatUTC() {
+		t.Fatalf("JSON = %s", data)
+	}
+	for _, field := range []string{"ktime_ns", "kernel_observed_ns"} {
+		if _, ok := raw[field]; ok {
+			t.Fatalf("internal clock %q leaked into JSON", field)
+		}
 	}
 }

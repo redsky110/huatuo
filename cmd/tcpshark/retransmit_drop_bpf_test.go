@@ -124,8 +124,8 @@ func TestDropwatchSourceReadPerfStatus(t *testing.T) {
 	object := &dropwatchSourceBPFStub{
 		perfRaw: encodeDropwatchPerfStats(
 			t,
-			abi.BPFPerfOutputStats{Lost: 1},
-			abi.BPFPerfOutputStats{Lost: 3},
+			abi.BPFPerfOutputStats{ErrorCounter: 1},
+			abi.BPFPerfOutputStats{ErrorCounter: 3},
 		),
 		rateRaw: encodeBPFRatelimitEvent(t, 6),
 	}
@@ -145,7 +145,7 @@ func TestDropwatchSourceReadPerfStatus(t *testing.T) {
 
 	object.perfRaw = encodeDropwatchPerfStats(
 		t,
-		abi.BPFPerfOutputStats{Lost: 3},
+		abi.BPFPerfOutputStats{ErrorCounter: 3},
 	)
 	if _, err := source.readPerfStatus(); err == nil ||
 		!containsErrorText(err, "perf_lost regressed") {
@@ -154,7 +154,7 @@ func TestDropwatchSourceReadPerfStatus(t *testing.T) {
 
 	object.perfRaw = encodeDropwatchPerfStats(
 		t,
-		abi.BPFPerfOutputStats{Lost: 4},
+		abi.BPFPerfOutputStats{ErrorCounter: 4},
 	)
 	object.rateRaw = encodeBPFRatelimitEvent(t, 5)
 	if _, err := source.readPerfStatus(); err == nil ||
@@ -182,8 +182,8 @@ func TestDropwatchSourceRejectsInvalidPerfStatus(t *testing.T) {
 			name: "perf lost overflow",
 			perfRaw: encodeDropwatchPerfStats(
 				t,
-				abi.BPFPerfOutputStats{Lost: math.MaxUint64},
-				abi.BPFPerfOutputStats{Lost: 1},
+				abi.BPFPerfOutputStats{ErrorCounter: math.MaxUint64},
+				abi.BPFPerfOutputStats{ErrorCounter: 1},
 			),
 			wantError: "perf_lost overflow",
 		},
@@ -214,7 +214,7 @@ func TestDropwatchSourceReadEvents(t *testing.T) {
 	defer cancel()
 
 	record := newIPv4DropwatchTCPRecord(40)
-	record.Meta.KtimeNS = 10
+	record.Meta.KernelObservedNS = 10
 	record.Meta.NetNamespaceCookie = 1
 	reader := &dropwatchSourceReaderStub{
 		records: []*abi.DropwatchPacketEvent{record},
@@ -234,7 +234,7 @@ func TestDropwatchSourceReadEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readEvents() error = %v", err)
 	}
-	if event.ktimeNS != 10 || event.flow != testFlowKey(12345, 80) ||
+	if event.kernelObservedNS != 10 || event.flow != testFlowKey(12345, 80) ||
 		event.sequence != 123 || event.endSequence != 123 {
 		t.Fatalf("event = %+v", event)
 	}

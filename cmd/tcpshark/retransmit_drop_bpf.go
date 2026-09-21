@@ -33,7 +33,6 @@ const (
 	embeddedHardwareProgramSection = "raw_tracepoint/devlink_trap_report"
 	embeddedPerfStatusMapName      = "bpf_perf_out_dropwatch"
 	embeddedRateLimitStateMapName  = "bpf_rlimit_dropwatch"
-	dropwatchPerfBufferSize        = 8192
 )
 
 type dropwatchSource struct {
@@ -98,7 +97,7 @@ func openDropwatchSource(
 	reader, err := object.AttachAndEventPipe(
 		ctx,
 		"perf_events",
-		dropwatchPerfBufferSize,
+		bpf.DefaultPerfEventBufferBytes,
 	)
 	if err != nil {
 		return nil, errors.Join(
@@ -181,13 +180,13 @@ func (s *dropwatchSource) readPerfStatus() (types.DropwatchPerfStatus, error) {
 				err,
 			)
 		}
-		if math.MaxUint64-status.PerfLost < cpuStatus.Lost {
+		if math.MaxUint64-status.PerfLost < cpuStatus.ErrorCounter {
 			return types.DropwatchPerfStatus{}, fmt.Errorf(
 				"decode embedded dropwatch BPF map %q: perf_lost overflow",
 				embeddedPerfStatusMapName,
 			)
 		}
-		status.PerfLost += cpuStatus.Lost
+		status.PerfLost += cpuStatus.ErrorCounter
 	}
 
 	raw, err = s.object.ReadMap(s.rateLimitStateMap, key)

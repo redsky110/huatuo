@@ -67,7 +67,7 @@ func attachRetransmitPrograms(
 	bpfObj bpf.BPF,
 	isTLPEnabled bool,
 ) (bpf.PerfEventReader, error) {
-	reader, err := bpfObj.EventPipeByName(ctx, "perf_events", 8192)
+	reader, err := bpfObj.EventPipeByName(ctx, "perf_events", bpf.DefaultPerfEventBufferBytes)
 	if err != nil {
 		return nil, fmt.Errorf("open event pipe: %w", err)
 	}

@@ -24,6 +24,7 @@ import (
 	"github.com/ccfos/huatuo/internal/bpf"
 	"github.com/ccfos/huatuo/internal/bpf/abi"
 	"github.com/ccfos/huatuo/internal/log"
+	"github.com/ccfos/huatuo/internal/timeutil"
 	"github.com/ccfos/huatuo/internal/tracing"
 	"github.com/ccfos/huatuo/internal/utils/bytesutil"
 	"github.com/ccfos/huatuo/internal/utils/kmsgutil"
@@ -32,7 +33,7 @@ import (
 	"github.com/cloudflare/backoff"
 )
 
-//go:generate $BPF_COMPILE $BPF_INCLUDE -s $BPF_DIR/softlockup.c -o $BPF_DIR/softlockup.o
+//go:generate $BPF_COMPILE $BPF_INCLUDE -s $BPF_DIR/system_softlockup.c -o $BPF_DIR/system_softlockup.o
 
 // TracerData is the full data structure.
 type SoftLockupTracerData struct {
@@ -85,7 +86,7 @@ func (c *softLockupTracing) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	reader, err := b.AttachAndEventPipe(childCtx, "softlockup_perf_events", 8192)
+	reader, err := b.AttachAndEventPipe(childCtx, "softlockup_perf_events", bpf.DefaultPerfEventBufferBytes)
 	if err != nil {
 		return err
 	}
@@ -123,7 +124,7 @@ func (c *softLockupTracing) Start(ctx context.Context) error {
 
 			if err := tracing.Save(&tracing.WriteRequest{
 				TracerName:        "softlockup",
-				ObservedTimestamp: time.Now().UTC(),
+				ObservedTimestamp: timeutil.Now(),
 				TracerData: &SoftLockupTracerData{
 					CPU:       data.CPU,
 					PID:       data.TGID,

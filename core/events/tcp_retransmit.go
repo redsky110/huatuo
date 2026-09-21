@@ -138,16 +138,21 @@ func handleTCPRetransmitEvent(_ *toolstream.Session, ev *types.TCPRetransmitTrac
 		})
 	}
 
-	observedTimestamp, err := timeutil.Parse(ev.ObservedTimestamp)
-	if err != nil {
-		return fmt.Errorf("parse tcp retransmit observed timestamp: %w", err)
+	if ev.ObservedTimestamp.IsZero() {
+		return errors.New("tcp retransmit observed timestamp is required")
+	}
+	var kernelObservedTimestamp timeutil.Timestamp
+	if ev.KernelObservedTimestamp != nil {
+		kernelObservedTimestamp = *ev.KernelObservedTimestamp
 	}
 	tracerData := *ev
-	tracerData.ObservedTimestamp = ""
+	tracerData.ObservedTimestamp = timeutil.Timestamp{}
+	tracerData.KernelObservedTimestamp = nil
 	return tracing.Save(&tracing.WriteRequest{
-		TracerName:        tcpRetransmitTracerName,
-		ContainerID:       ev.ContainerID,
-		ObservedTimestamp: observedTimestamp,
-		TracerData:        &tracerData,
+		TracerName:              tcpRetransmitTracerName,
+		ContainerID:             ev.ContainerID,
+		ObservedTimestamp:       ev.ObservedTimestamp,
+		KernelObservedTimestamp: kernelObservedTimestamp,
+		TracerData:              &tracerData,
 	})
 }

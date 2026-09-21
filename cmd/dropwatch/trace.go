@@ -110,7 +110,7 @@ func mainAction(ctx context.Context, options *dropwatchOptions) (returnErr error
 		}()
 	}
 
-	reader, err := bpfObj.AttachAndEventPipe(groupCtx, "perf_events", 8192)
+	reader, err := bpfObj.AttachAndEventPipe(groupCtx, "perf_events", bpf.DefaultPerfEventBufferBytes)
 	if err != nil {
 		return fmt.Errorf("attach BPF programs: %w", err)
 	}
@@ -171,7 +171,11 @@ func streamDropwatchEvents(
 			return fmt.Errorf("read event: %w", err)
 		}
 
-		if err := sink.Write(formatEvent(&ev, names, sourceType)); err != nil {
+		event, err := formatEvent(&ev, names, sourceType)
+		if err != nil {
+			return err
+		}
+		if err := sink.Write(event); err != nil {
 			return fmt.Errorf("write event: %w", err)
 		}
 	}

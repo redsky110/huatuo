@@ -52,7 +52,7 @@ func newDropWatch() (*tracing.EventTracingAttr, error) {
 func (c *dropWatchTracing) Start(ctx context.Context) error {
 	cfg := configSnapshot()
 	args := []string{
-		"--bpf-path", path.Join(internalconfig.CoreBpfDir, "dropwatch.o"),
+		"--bpf-path", path.Join(internalconfig.CoreBpfDir, "net_dropwatch.o"),
 		"--output-storage", toolstream.DefaultSockPath,
 		"--filter", cfg.Dropwatch.Filter,
 		"--max-events-per-second", strconv.FormatUint(cfg.Dropwatch.MaxEventsPerSecond, 10),
@@ -99,17 +99,22 @@ func handleDropwatchEvent(_ *toolstream.Session, ev *types.DropWatchTracing) err
 		})
 	}
 
-	observedTimestamp, err := timeutil.Parse(ev.ObservedTimestamp)
-	if err != nil {
-		return fmt.Errorf("parse dropwatch observed timestamp: %w", err)
+	if ev.ObservedTimestamp.IsZero() {
+		return errors.New("dropwatch observed timestamp is required")
+	}
+	var kernelObservedTimestamp timeutil.Timestamp
+	if ev.KernelObservedTimestamp != nil {
+		kernelObservedTimestamp = *ev.KernelObservedTimestamp
 	}
 	tracerData := *ev
-	tracerData.ObservedTimestamp = ""
+	tracerData.ObservedTimestamp = timeutil.Timestamp{}
+	tracerData.KernelObservedTimestamp = nil
 	return tracing.Save(&tracing.WriteRequest{
-		TracerName:        "dropwatch",
-		ContainerID:       ev.ContainerID,
-		ObservedTimestamp: observedTimestamp,
-		TracerData:        &tracerData,
+		TracerName:              "dropwatch",
+		ContainerID:             ev.ContainerID,
+		ObservedTimestamp:       ev.ObservedTimestamp,
+		KernelObservedTimestamp: kernelObservedTimestamp,
+		TracerData:              &tracerData,
 	})
 }
 

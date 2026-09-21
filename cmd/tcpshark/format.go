@@ -38,7 +38,7 @@ func (s *textWriter) Write(ev *types.TCPRetransmitTracing) error {
 	// Full events are normally below 512 bytes, so one allocation covers the
 	// common hot path without retaining an unbounded buffer between events.
 	line := make([]byte, 0, textEventBufferSize)
-	line = append(line, ev.ObservedTimestamp...)
+	line = append(line, ev.ObservedTimestamp.FormatUTC()...)
 	line = append(line, " ["...)
 	line = append(line, ev.Phase...)
 	line = append(line, '/')
@@ -55,8 +55,10 @@ func (s *textWriter) Write(ev *types.TCPRetransmitTracing) error {
 	line = append(line, ev.TCPState...)
 	line = append(line, " event_type="...)
 	line = append(line, ev.EventType...)
-	line = append(line, " ktime_ns="...)
-	line = strconv.AppendUint(line, ev.KtimeNS, 10)
+	if ev.KernelObservedTimestamp != nil {
+		line = append(line, " kernel_observed_timestamp="...)
+		line = append(line, ev.KernelObservedTimestamp.FormatUTC()...)
+	}
 	if ev.EventType == "tcp_retransmit_synack" {
 		line = append(line, " [SYNACK]"...)
 	}

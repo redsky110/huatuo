@@ -36,9 +36,9 @@ import (
 	"github.com/cloudflare/backoff"
 )
 
-//go:generate $BPF_COMPILE $BPF_INCLUDE -s $BPF_DIR/ras.c -o $BPF_DIR/ras.o
+//go:generate $BPF_COMPILE $BPF_INCLUDE -s $BPF_DIR/system_ras.c -o $BPF_DIR/system_ras.o
 
-// Hardware error type identifiers — must stay in sync with bpf/ras.c.
+// Hardware error type identifiers — must stay in sync with bpf/system_ras.c.
 const (
 	HW_ERR_MCE       = 0
 	HW_ERR_EDAC      = 1
@@ -96,11 +96,11 @@ type rasEvent = abi.RASEvent
 
 // RasTracingData is the structured record persisted by tracing.Save.
 type RasTracingData struct {
-	Device            string `json:"dev"`
-	Event             string `json:"event"`
-	ErrType           string `json:"type"`
-	Info              string `json:"info"`
-	observedTimestamp time.Time
+	Device                  string `json:"dev"`
+	Event                   string `json:"event"`
+	ErrType                 string `json:"type"`
+	Info                    string `json:"info"`
+	kernelObservedTimestamp timeutil.Timestamp
 }
 
 const defaultThrEventBackoff = 30 * time.Minute
@@ -137,16 +137,18 @@ func newRasTracing() (*tracing.EventTracingAttr, error) {
 	}, nil
 }
 
-// hasRasTracepoint reports whether the running kernel exposes the ras:*
-// tracepoint family. Without it, CO-RE relocations against
-// trace_event_raw_mc_event resolve to a poisoned helper id and BPF load
-// fails at the verifier — common on stripped VM kernels (e.g. OrbStack).
+// hasRasTracepoint reports whether the running kernel exposes the tracepoints
+// required by the RAS BPF object. Without them, loading or attaching fails on
+// stripped VM kernels.
 func hasRasTracepoint() bool {
-	for _, p := range []string{
-		"/sys/kernel/tracing/events/ras",
-		"/sys/kernel/debug/tracing/events/ras",
+	for _, root := range []string{
+		"/sys/kernel/tracing/events",
+		"/sys/kernel/debug/tracing/events",
 	} {
-		if _, err := os.Stat(p); err == nil {
+		if _, err := os.Stat(root + "/ras"); err != nil {
+			continue
+		}
+		if _, err := os.Stat(root + "/mce/mce_record"); err == nil {
 			return true
 		}
 	}
@@ -357,16 +359,16 @@ func newRasTracingData[T any](ev *rasEvent, device, event, errType string, info 
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s info: %w", event, err)
 	}
-	observedAt, err := timeutil.KtimeToTime(ev.KtimeNS)
+	observedAt, err := timeutil.KtimeToTimestamp(ev.KernelObservedNS)
 	if err != nil {
 		return nil, fmt.Errorf("convert %s event time: %w", event, err)
 	}
 	return &RasTracingData{
-		Device:            device,
-		Event:             event,
-		ErrType:           errType,
-		Info:              string(b),
-		observedTimestamp: observedAt.UTC(),
+		Device:                  device,
+		Event:                   event,
+		ErrType:                 errType,
+		Info:                    string(b),
+		kernelObservedTimestamp: observedAt,
 	}, nil
 }
 
@@ -651,7 +653,7 @@ func (ras *rasTracing) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	reader, err := b.AttachAndEventPipe(childCtx, "ras_event_map", 8192)
+	reader, err := b.AttachAndEventPipe(childCtx, "ras_event_map", bpf.DefaultPerfEventBufferBytes)
 	if err != nil {
 		return fmt.Errorf("attach ras event pipe: %w", err)
 	}
@@ -679,6 +681,8 @@ func (ras *rasTracing) rasEventLoop(ctx context.Context, reader bpf.PerfEventRea
 				return fmt.Errorf("read ras event: %w", err)
 			}
 
+			observedTimestamp := timeutil.Now()
+
 			if int(ev.Type) < maxNumHWErrTypes {
 				ras.counts[ev.Type].Add(1)
 			}
@@ -698,9 +702,10 @@ func (ras *rasTracing) rasEventLoop(ctx context.Context, reader bpf.PerfEventRea
 			}
 
 			if err := tracing.Save(&tracing.WriteRequest{
-				TracerName:        "ras",
-				ObservedTimestamp: tracerData.observedTimestamp,
-				TracerData:        tracerData,
+				TracerName:              "ras",
+				ObservedTimestamp:       observedTimestamp,
+				KernelObservedTimestamp: tracerData.kernelObservedTimestamp,
+				TracerData:              tracerData,
 			}); err != nil {
 				log.Warnf("failed to save tracing data: %v", err)
 			}

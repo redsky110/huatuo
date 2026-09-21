@@ -20,13 +20,13 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ccfos/huatuo/internal/bpf/abi"
 	"github.com/ccfos/huatuo/internal/linkstatus"
 	"github.com/ccfos/huatuo/internal/log"
 	"github.com/ccfos/huatuo/internal/packet"
 	"github.com/ccfos/huatuo/internal/symbol"
+	"github.com/ccfos/huatuo/internal/timeutil"
 	"github.com/ccfos/huatuo/internal/toolstream"
 	"github.com/ccfos/huatuo/internal/utils/bytesutil"
 	"github.com/ccfos/huatuo/internal/utils/kernaddr"
@@ -42,7 +42,11 @@ type textWriter struct{ w io.Writer }
 
 func (s *textWriter) Write(ev *types.DropWatchTracing) error {
 	line := make([]byte, 0, 256)
-	line = append(line, ev.ObservedTimestamp...)
+	line = append(line, ev.ObservedTimestamp.FormatUTC()...)
+	if ev.KernelObservedTimestamp != nil {
+		line = append(line, " kernel_observed_timestamp="...)
+		line = append(line, ev.KernelObservedTimestamp.FormatUTC()...)
+	}
 	line = append(line, ' ')
 	line = append(line, ev.Layers.String()...)
 	line = append(line, " reason="...)
@@ -140,7 +144,12 @@ func newWriter(output io.Writer, options *writerOptions) (writer, func() error, 
 	}
 }
 
-func formatEvent(ev *abi.DropwatchPacketEvent, names dropReason, sourceType string) *types.DropWatchTracing {
+func formatEvent(ev *abi.DropwatchPacketEvent, names dropReason, sourceType string) (*types.DropWatchTracing, error) {
+	observedTimestamp := timeutil.Now()
+	kernelObservedTimestamp, err := timeutil.KtimeToTimestamp(ev.Meta.KernelObservedNS)
+	if err != nil {
+		return nil, fmt.Errorf("convert dropwatch kernel observation time: %w", err)
+	}
 	pkt := packet.Hdr{
 		EthProto:  ev.PktHdr.EthProto,
 		RawLen:    uint8(ev.PktHdr.RawLen),
@@ -164,27 +173,28 @@ func formatEvent(ev *abi.DropwatchPacketEvent, names dropReason, sourceType stri
 	}
 
 	return &types.DropWatchTracing{
-		ObservedTimestamp:   time.Now().UTC().Format(time.RFC3339Nano),
-		DropSource:          dropSource,
-		DropReason:          dropReason,
-		DropReasonGroup:     bytesutil.ToStr(ev.Meta.TrapGroupName[:]),
-		DropLocation:        kernaddr.Format(ev.Meta.DropLocation),
-		Comm:                bytesutil.ToStr(ev.Meta.Comm[:]),
-		PID:                 ev.Meta.TGIDPID >> 32,
-		MemoryCgroupCSSAddr: kernaddr.Format(ev.Meta.MemcgCSSAddr),
-		NetNamespaceCookie:  ev.Meta.NetNamespaceCookie,
-		NetNamespaceInum:    ev.Meta.NetNamespaceInum,
-		NetdevName:          bytesutil.ToStr(ev.Meta.DevName[:]),
-		NetdevIfindex:       ev.Meta.Ifindex,
-		NetdevQueueMapping:  ev.Meta.QueueMapping,
-		NetdevLinkStatus:    linkstatus.FlagsRaw(ev.Meta.DevFlags),
-		PacketSkbAddr:       kernaddr.Format(ev.Meta.SKBAddr),
-		PacketEthProto:      "0x" + strconv.FormatUint(uint64(ev.PktHdr.EthProto), 16),
-		PacketLenBytes:      ev.PktHdr.PacketLenBytes,
-		Layers:              p,
-		Stack:               stackStr,
-		Source:              sourceType,
-	}
+		ObservedTimestamp:       observedTimestamp,
+		KernelObservedTimestamp: &kernelObservedTimestamp,
+		DropSource:              dropSource,
+		DropReason:              dropReason,
+		DropReasonGroup:         bytesutil.ToStr(ev.Meta.TrapGroupName[:]),
+		DropLocation:            kernaddr.Format(ev.Meta.DropLocation),
+		Comm:                    bytesutil.ToStr(ev.Meta.Comm[:]),
+		PID:                     ev.Meta.TGIDPID >> 32,
+		MemoryCgroupCSSAddr:     kernaddr.Format(ev.Meta.MemcgCSSAddr),
+		NetNamespaceCookie:      ev.Meta.NetNamespaceCookie,
+		NetNamespaceInum:        ev.Meta.NetNamespaceInum,
+		NetdevName:              bytesutil.ToStr(ev.Meta.DevName[:]),
+		NetdevIfindex:           ev.Meta.Ifindex,
+		NetdevQueueMapping:      ev.Meta.QueueMapping,
+		NetdevLinkStatus:        linkstatus.FlagsRaw(ev.Meta.DevFlags),
+		PacketSkbAddr:           kernaddr.Format(ev.Meta.SKBAddr),
+		PacketEthProto:          "0x" + strconv.FormatUint(uint64(ev.PktHdr.EthProto), 16),
+		PacketLenBytes:          ev.PktHdr.PacketLenBytes,
+		Layers:                  p,
+		Stack:                   stackStr,
+		Source:                  sourceType,
+	}, nil
 }
 
 func dropSourceName(source abi.DropwatchDropSource) string {
