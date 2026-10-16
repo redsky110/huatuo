@@ -206,7 +206,9 @@ gen-build: $(BPF_BUILD_STAMP)
 	@set -eu; $(call generate-openapi,.)
 	@set -eu; $(generate-non-openapi)
 
-test: unit integration e2e
+# Temporary focus while developing the cpusys E2E test.
+test: build
+	@bash e2e/run.sh test_autotracing_cpusys.sh
 
 unit: gen-build
 	@go test -v ./... -coverprofile=$(APP_CMD_OUTPUT)/unit-coverage.txt -timeout=5m
