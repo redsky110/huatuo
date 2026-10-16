@@ -111,7 +111,7 @@ func (c *cpuUtilCollector) updateDataCache(cache *cpuUtilStat, container *pod.Co
 	deltaTotalTime := stat.Usage - cache.lastUsage.Usage
 	deltaUsrTime := stat.User - cache.lastUsage.User
 	deltaSysTime := stat.System - cache.lastUsage.System
-	deltaRealWorldTime := numCores * float64(now.Sub(cache.lastTimestamp).Microseconds())
+	deltaRealWorldTime := numCores * float64(time.Since(cache.lastTimestamp).Microseconds())
 
 	if (float64(deltaTotalTime) > deltaRealWorldTime) || (float64(deltaUsrTime+deltaSysTime) > deltaRealWorldTime) {
 		cache.lastUsage = *stat
