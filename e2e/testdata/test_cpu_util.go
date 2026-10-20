@@ -16,7 +16,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,7 +25,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	dto "github.com/prometheus/client_model/go"
@@ -89,11 +87,7 @@ func run(args []string) error {
 	}
 	var targets []target
 	if *targetFile != "" {
-		data, err := os.ReadFile(*targetFile)
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal(data, &targets); err != nil {
+		if err := readJSON(*targetFile, &targets); err != nil {
 			return err
 		}
 	}
@@ -145,28 +139,14 @@ func run(args []string) error {
 		_, err = metricValues(families, targets)
 		return err
 	case "concurrent":
-		var wg sync.WaitGroup
-		errs := make(chan error, 4)
-		for range 4 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for range 40 {
-					_, families, err := fetch(client, *url)
-					if err == nil {
-						_, err = metricValues(families, targets)
-					}
-					if err != nil {
-						errs <- err
-						return
-					}
-					time.Sleep(500 * time.Millisecond)
-				}
-			}()
-		}
-		wg.Wait()
-		close(errs)
-		return <-errs
+		return runConcurrent(4, 40, 500*time.Millisecond, func() error {
+			_, families, err := fetch(client, *url)
+			if err != nil {
+				return err
+			}
+			_, err = metricValues(families, targets)
+			return err
+		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -344,51 +324,29 @@ func metricName(t *target, field string) string {
 	return prefix + field
 }
 
-func value(family *dto.MetricFamily, t *target) (float64, error) {
-	if family == nil || family.GetType() != dto.MetricType_GAUGE || family.GetHelp() == "" {
-		return 0, fmt.Errorf("%s: missing Gauge/HELP for CPU metric", t.Name)
+func metricValues(families map[string]*dto.MetricFamily, targets []target) ([]usage, error) {
+	if err := validateCollector(families, "cpu_util"); err != nil {
+		return nil, err
 	}
 	host, err := os.Hostname()
 	if err != nil {
-		return 0, err
-	}
-	expected := map[string]string{"host": host, "region": "e2e"}
-	if t.Pod != "" {
-		expected["container_host"] = t.Pod
-		expected["container_name"] = t.Container
-		expected["container_hostnamespace"] = t.Namespace
-		expected["container_type"] = t.Type
-		expected["container_level"] = t.QoS
-	}
-	count, result := 0, 0.0
-	for _, metric := range family.GetMetric() {
-		values := labels(metric)
-		if !matches(t, values) {
-			continue
-		}
-		if err := validateLabels(values, expected); err != nil {
-			return 0, fmt.Errorf("%s: %s: %w", t.Name, family.GetName(), err)
-		}
-		count++
-		result = metric.GetGauge().GetValue()
-	}
-	if count != 1 || math.IsNaN(result) || math.IsInf(result, 0) || result < 0 {
-		return 0, fmt.Errorf("%s: %s has %d matching samples, value=%g", t.Name, family.GetName(), count, result)
-	}
-	return result, nil
-}
-
-func metricValues(families map[string]*dto.MetricFamily, targets []target) ([]usage, error) {
-	if err := validateCollector(families, "cpu_util"); err != nil {
 		return nil, err
 	}
 	result := make([]usage, len(targets))
 	for i := range targets {
 		t := &targets[i]
+		expected := map[string]string{"host": host, "region": "e2e"}
+		if t.Pod != "" {
+			expected["container_host"] = t.Pod
+			expected["container_name"] = t.Container
+			expected["container_hostnamespace"] = t.Namespace
+			expected["container_type"] = t.Type
+			expected["container_level"] = t.QoS
+		}
 		for _, field := range []string{"usr", "sys", "total"} {
-			n, err := value(families[metricName(t, field)], t)
+			n, err := gaugeValue(families[metricName(t, field)], expected)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%s: %w", t.Name, err)
 			}
 			if n > 100 {
 				return nil, fmt.Errorf("%s: %s=%.4f exceeds 100%%", t.Name, field, n)
@@ -403,9 +361,9 @@ func metricValues(families map[string]*dto.MetricFamily, targets []target) ([]us
 			}
 		}
 		if t.Pod != "" {
-			n, err := value(families[metricName(t, "cores")], t)
+			n, err := gaugeValue(families[metricName(t, "cores")], expected)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%s: %w", t.Name, err)
 			}
 			cores, err := capacity(t)
 			if err != nil {
@@ -531,15 +489,11 @@ func measure(client *http.Client, url string, targets []target, ticks float64, i
 		all = append(all, next)
 		previous = next
 	}
-	artifact, err := json.MarshalIndent(struct {
+	if err := writeJSON(filepath.Join(output, "samples.json"), struct {
 		Targets []target `json:"Targets"`
 		Samples []sample `json:"Samples"`
 		Ticks   float64  `json:"Ticks"`
-	}{targets, all, ticks}, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(output, "samples.json"), artifact, 0o600); err != nil {
+	}{targets, all, ticks}); err != nil {
 		return err
 	}
 	elapsed := previous.At.Sub(first.At).Seconds()

@@ -15,7 +15,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,7 +24,6 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cilium/ebpf"
@@ -42,26 +40,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "runqlat:", err)
 		os.Exit(1)
 	}
-}
-
-func readJSON(path string, dst any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, dst)
-}
-
-func writeJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return err
-	}
-	if path == "" {
-		fmt.Println(string(data))
-		return nil
-	}
-	return os.WriteFile(path, data, 0o600)
 }
 
 func run(args []string) error {
@@ -146,24 +124,9 @@ func run(args []string) error {
 	case "check":
 		return check(o, client, *url, targets, *stable, *output)
 	case "concurrent":
-		var wg sync.WaitGroup
-		errs := make(chan error, 4)
-		for range 4 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for range 8 {
-					if err := check(o, client, *url, targets, false, ""); err != nil {
-						errs <- err
-						return
-					}
-					time.Sleep(250 * time.Millisecond)
-				}
-			}()
-		}
-		wg.Wait()
-		close(errs)
-		if err := <-errs; err != nil {
+		if err := runConcurrent(4, 8, 250*time.Millisecond, func() error {
+			return check(o, client, *url, targets, false, "")
+		}); err != nil {
 			return err
 		}
 		fmt.Println("concurrent: 32 map/metric comparisons passed")

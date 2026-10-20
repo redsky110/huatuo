@@ -75,7 +75,7 @@ if [[ -n ${RUNQLAT_HELPER_BIN:-} ]]; then
 else
 	require_commands go
 	CGO_ENABLED=0 go build -mod=vendor -o "${RUNQLAT_BIN}" "${ROOT_DIR}/e2e/testdata/test_cpu_runqlat.go" \
-		"${ROOT_DIR}/e2e/testdata/test_cpu_runqlat_maps.go" "${ROOT_DIR}/e2e/testdata/metrics_helpers.go"
+		"${ROOT_DIR}/e2e/testdata/test_cpu_runqlat_maps.go" "${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
 fi
 if [[ -n ${CPU_LOAD_HELPER_BIN:-} ]]; then
 	require_commands "${CPU_LOAD_HELPER_BIN}"
