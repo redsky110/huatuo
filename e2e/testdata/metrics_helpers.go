@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 
 	dto "github.com/prometheus/client_model/go"
@@ -65,6 +66,29 @@ func validateLabels(actual, expected map[string]string) error {
 		}
 	}
 	return nil
+}
+
+func gaugeValue(family *dto.MetricFamily, expected map[string]string) (float64, error) {
+	if family == nil || family.GetType() != dto.MetricType_GAUGE || family.GetHelp() == "" {
+		return 0, fmt.Errorf("%s: missing Gauge/HELP", family.GetName())
+	}
+	count, value := 0, 0.0
+	for _, metric := range family.GetMetric() {
+		values := labels(metric)
+		if _, container := expected["container_host"]; container &&
+			!matchesContainer(values, expected["container_host"], expected["container_name"], expected["container_hostnamespace"]) {
+			continue
+		}
+		if err := validateLabels(values, expected); err != nil {
+			return 0, fmt.Errorf("%s: %w", family.GetName(), err)
+		}
+		count++
+		value = metric.GetGauge().GetValue()
+	}
+	if count != 1 || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, fmt.Errorf("%s: expected one finite Gauge sample, got %d, value=%g", family.GetName(), count, value)
+	}
+	return value, nil
 }
 
 func validateCollector(families map[string]*dto.MetricFamily, collector string) error {

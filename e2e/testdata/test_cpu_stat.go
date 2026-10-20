@@ -15,7 +15,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,7 +24,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -94,11 +92,7 @@ func run(args []string) error {
 	}
 	var targets []target
 	if *file != "" {
-		data, err := os.ReadFile(*file)
-		if err != nil {
-			return err
-		}
-		if err := json.Unmarshal(data, &targets); err != nil {
+		if err := readJSON(*file, &targets); err != nil {
 			return err
 		}
 	}
@@ -138,34 +132,23 @@ func run(args []string) error {
 		}
 		return nil
 	case "concurrent":
-		var wg sync.WaitGroup
 		var requests, omitted atomic.Int64
-		errs := make(chan error, 4)
-		for range 4 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for range 8 {
-					complete, err := concurrentSample(client, *url, targets, *wait)
-					if err != nil {
-						errs <- err
-						return
-					}
-					requests.Add(1)
-					if !complete {
-						omitted.Add(1)
-					}
-					time.Sleep(500 * time.Millisecond)
-				}
-			}()
-		}
-		wg.Wait()
-		close(errs)
+		err := runConcurrent(4, 8, 500*time.Millisecond, func() error {
+			complete, err := concurrentSample(client, *url, targets, *wait)
+			if err != nil {
+				return err
+			}
+			requests.Add(1)
+			if !complete {
+				omitted.Add(1)
+			}
+			return nil
+		})
 		fmt.Printf("concurrent requests=%d complete=%d refresh-window omissions=%d\n", requests.Load(), requests.Load()-omitted.Load(), omitted.Load())
 		if requests.Load() == omitted.Load() {
 			return errors.New("concurrent scrapes did not produce any complete cpu_stat sample")
 		}
-		return <-errs
+		return err
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -227,35 +210,26 @@ func matches(metric *dto.Metric, t *target) bool {
 }
 
 func metricValue(family *dto.MetricFamily, t *target, required bool) (float64, error) {
-	count, value := 0, 0.0
-	for _, metric := range family.GetMetric() {
-		if !matches(metric, t) {
-			continue
-		}
-		if !required {
-			return 0, fmt.Errorf("%s: unexpected metric %s", t.Pod, family.GetName())
-		}
-		host, err := os.Hostname()
-		if err != nil {
-			return 0, err
-		}
-		expected := map[string]string{
-			"host": host, "region": "e2e", "container_host": t.Pod,
-			"container_name": t.Container, "container_hostnamespace": t.Namespace,
-			"container_type": "normal", "container_level": "burstable",
-		}
-		values := labels(metric)
-		if err := validateLabels(values, expected); err != nil {
-			return 0, fmt.Errorf("%s: %w", t.Pod, err)
-		}
-		value = metric.GetGauge().GetValue()
-		count++
-	}
 	if !required {
+		for _, metric := range family.GetMetric() {
+			if matches(metric, t) {
+				return 0, fmt.Errorf("%s: unexpected metric %s", t.Pod, family.GetName())
+			}
+		}
 		return 0, nil
 	}
-	if count != 1 || family.GetType() != dto.MetricType_GAUGE || family.GetHelp() == "" || value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0, fmt.Errorf("%s: expected one finite Gauge/HELP sample, got %d, value=%g", t.Pod, count, value)
+	host, err := os.Hostname()
+	if err != nil {
+		return 0, err
+	}
+	expected := map[string]string{
+		"host": host, "region": "e2e", "container_host": t.Pod,
+		"container_name": t.Container, "container_hostnamespace": t.Namespace,
+		"container_type": "normal", "container_level": "burstable",
+	}
+	value, err := gaugeValue(family, expected)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", t.Pod, err)
 	}
 	return value, nil
 }
@@ -513,14 +487,10 @@ func measure(client *http.Client, url string, targets []target, output string, o
 		}
 		all = append(all, s)
 	}
-	data, err := json.MarshalIndent(struct {
+	if err := writeJSON(filepath.Join(output, "samples.json"), struct {
 		Targets []target `json:"Targets"`
 		Samples []sample `json:"Samples"`
-	}{targets, all}, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(output, "samples.json"), data, 0o600); err != nil {
+	}{targets, all}); err != nil {
 		return err
 	}
 	first, last := &all[0], &all[len(all)-1]
