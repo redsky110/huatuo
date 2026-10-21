@@ -22,7 +22,7 @@ fail() {
 }
 [ "$#" -eq 3 ] && [ "$1" = load ] && [ "$2" = --control ] || fail 'use load --control <command file>'
 control=$3
-stress_ng=$(dirname "$0")/stress-ng
+stress_ng=${STRESS_NG_BIN:-$(dirname "$0")/stress-ng}
 "$stress_ng" --version
 previous=
 load_pid=
@@ -51,7 +51,7 @@ EOF
 		case "$count" in 1 | 2 | 3) ;; *) fail "workers must be 1, 2 or 3: $count" ;; esac
 		[ "$milli" -ge 0 ] && [ "$milli" -le 2000 ] || fail "millicpu must be between 0 and 2000: $milli"
 		stop_load
-		set -- --timeout 1h --abort --metrics-brief --temp-path /tmp
+		set -- --timeout 1h --abort --metrics-brief --temp-path /tmp --keep-name
 		case "$mode" in
 		user)
 			percent=100
