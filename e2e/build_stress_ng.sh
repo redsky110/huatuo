@@ -21,9 +21,9 @@ readonly version=0.17.08
 readonly archive_sha256=e4982d2a1c57139dad1741d6248b00a30935f746c1f665ec5b9d53c010c8dc08
 readonly directory="${repo}/_output/stress-ng-${version}"
 readonly archive="${directory}/source.tar.gz"
-export CC=${CC:-musl-gcc}
+export CC=${CC:-gcc}
 command -v "${CC}" > /dev/null || {
-	echo "stress-ng build: ${CC} is missing; run this script in the project build container" >&2
+	echo "stress-ng build: ${CC} is missing; install gcc and the static C libraries" >&2
 	exit 1
 }
 mkdir -p "${directory}/source" "${repo}/_output/bin"
@@ -34,6 +34,6 @@ printf '%s  %s\n' "${archive_sha256}" "${archive}" | sha256sum -c -
 if [[ ! -f ${directory}/source/Makefile ]]; then
 	tar -xzf "${archive}" --strip-components=1 -C "${directory}/source"
 fi
-make -C "${directory}/source" -j"${BUILD_JOBS:-8}" STATIC=1
+make -C "${directory}/source" -j"${BUILD_JOBS:-2}" STATIC=1
 cp "${directory}/source/stress-ng" "${repo}/_output/bin/stress-ng"
 "${repo}/_output/bin/stress-ng" --version

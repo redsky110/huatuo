@@ -16,7 +16,12 @@
 
 cpu_load_prepare() {
 	local directory=$1 binary=${STRESS_NG_BIN:-${ROOT_DIR}/_output/bin/stress-ng}
-	[[ -x ${binary} ]] || fatal "static stress-ng missing: ${binary}; build it with e2e/build_stress_ng.sh or set STRESS_NG_BIN"
+	if [[ ! -x ${binary} && -z ${STRESS_NG_BIN:-} ]]; then
+		log_info "building static stress-ng"
+		bash "${ROOT_DIR}/e2e/build_stress_ng.sh" \
+			|| fatal "stress-ng build failed; check compiler output and static C library availability"
+	fi
+	[[ -x ${binary} ]] || fatal "static stress-ng is not executable: ${binary}; check STRESS_NG_BIN"
 	"${binary}" --version | tee "${directory}/stress-ng-version.txt"
 	cp "${binary}" "${directory}/stress-ng"
 	cp "${ROOT_DIR}/e2e/testdata/test_cpu_load.sh" "${directory}/cpu-load"

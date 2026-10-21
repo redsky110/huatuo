@@ -122,7 +122,7 @@ install_test_dependencies() {
 	local os_id os_like package_manager package
 	local -a deb_packages=(curl gdb build-essential libelf-dev kmod "linux-headers-$(uname -r)")
 	local -a rpm_packages=(
-		curl gdb gcc make elfutils-libelf-devel kmod kernel-headers
+		curl gdb gcc glibc-static make elfutils-libelf-devel kmod kernel-headers
 		"kernel-devel-$(uname -r)"
 	)
 	local -a missing_packages=()
