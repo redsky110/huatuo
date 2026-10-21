@@ -20,6 +20,7 @@ source "${ROOT_DIR}/integration/lib.sh"
 source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
+source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
 
 require_commands kubectl jq findmnt ss getconf
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
@@ -65,13 +66,7 @@ else
 		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/proc_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
 fi
 
-if [[ -n ${CPU_LOAD_HELPER_BIN:-} ]]; then
-	require_commands "${CPU_LOAD_HELPER_BIN}"
-	cp "${CPU_LOAD_HELPER_BIN}" "${CPU_UTIL_LOAD}"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPU_UTIL_LOAD}" "${ROOT_DIR}/e2e/testdata/test_cpu_load.go"
-fi
+cpu_load_prepare "${CPU_UTIL_DIR}"
 
 # The runner changes the UTS hostname; kubelet identifies the actual local node.
 CPU_UTIL_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
@@ -128,6 +123,10 @@ cpu_util_command() {
 	printf '%s %s %s %s\n' "${mode}" "${milli}" "${workers}" "${cpu_util_generation}" \
 		> "${CPU_UTIL_DIR}/${container}.command.next"
 	mv "${CPU_UTIL_DIR}/${container}.command.next" "${CPU_UTIL_DIR}/${container}.command"
+	if [[ ${container} == host && -n ${cpu_util_host_pid} ]]; then
+		wait_until 10 1 cpu_load_ready "${CPU_UTIL_DIR}/host-workload.log" "${cpu_util_generation}" \
+			|| fatal "host stress-ng workload did not acknowledge its command"
+	fi
 }
 
 cpu_util_create() {
@@ -191,8 +190,12 @@ cpu_util_target() {
 }
 
 cpu_util_host_target() {
+	local pid=${cpu_util_host_pid:-0}
+	if [[ ${pid} != 0 && $1 != idle ]]; then
+		pid=$(cpu_load_worker_pid "${CPU_UTIL_DIR}/host-workload.log" "${cpu_util_generation}") || return 1
+	fi
 	jq -n --arg path "${CPU_UTIL_USAGE_ROOT}" --arg mode "$1" --argjson expected "$2" \
-		--argjson pid "${cpu_util_host_pid:-0}" \
+		--argjson pid "${pid}" \
 		'{Name: "host", UsagePath: $path, ExpectedMilli: -1, Mode: "", WorkerPID: $pid, WorkerMode: $mode, WorkerExpectedMilli: $expected}'
 }
 
@@ -311,8 +314,14 @@ done
 old_id=$(kubelet_container_ids "${CPU_UTIL_NS}" "^${half_pod}$")
 cpu_cgroup=$(cgroup_find_container "${CPU_UTIL_CPU_ROOT}" "${old_id}") || fatal "test container CPU cgroup disappeared before SIGKILL"
 mapfile -t container_pids < "${cpu_cgroup}/cgroup.procs"
-[[ ${#container_pids[@]} -eq 1 ]] || fatal "expected one load process in the test container before SIGKILL"
-init_pid=${container_pids[0]}
+init_pid=
+for pid in "${container_pids[@]}"; do
+	if awk '$1=="NSpid:" && $NF==1 { found=1 } END { exit !found }' "/proc/${pid}/status"; then
+		init_pid=${pid}
+		break
+	fi
+done
+[[ -n ${init_pid} ]] || fatal "cannot find the test container namespace init PID before SIGKILL"
 # Namespace init processes may ignore SIGKILL sent from within their namespace.
 grep -Fq "${old_id}" "/proc/${init_pid}/cgroup" || fatal "container init PID no longer belongs to the test cgroup"
 kill -KILL "${init_pid}"

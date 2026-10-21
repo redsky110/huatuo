@@ -20,6 +20,7 @@ source "${ROOT_DIR}/integration/lib.sh"
 source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
+source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
 
 require_commands kubectl jq findmnt ss taskset
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
@@ -77,13 +78,7 @@ else
 	CGO_ENABLED=0 go build -mod=vendor -o "${RUNQLAT_BIN}" "${ROOT_DIR}/e2e/testdata/test_cpu_runqlat.go" \
 		"${ROOT_DIR}/e2e/testdata/test_cpu_runqlat_maps.go" "${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
 fi
-if [[ -n ${CPU_LOAD_HELPER_BIN:-} ]]; then
-	require_commands "${CPU_LOAD_HELPER_BIN}"
-	cp "${CPU_LOAD_HELPER_BIN}" "${RUNQLAT_LOAD}"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${RUNQLAT_LOAD}" "${ROOT_DIR}/e2e/testdata/test_cpu_load.go"
-fi
+cpu_load_prepare "${RUNQLAT_DIR}"
 
 RUNQLAT_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local node") end')
 mapfile -t runqlat_cpus < <(awk '/Cpus_allowed_list/ {

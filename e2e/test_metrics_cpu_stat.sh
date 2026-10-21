@@ -20,6 +20,7 @@ source "${ROOT_DIR}/integration/lib.sh"
 source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
+source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
 
 require_commands kubectl jq findmnt ss sysctl taskset getconf
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}" /proc/sys/kernel/sched_schedstats
@@ -70,13 +71,7 @@ else
 	CGO_ENABLED=0 go build -mod=vendor -o "${CPU_STAT_BIN}" "${ROOT_DIR}/e2e/testdata/test_cpu_stat.go" \
 		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/proc_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
 fi
-if [[ -n ${CPU_LOAD_HELPER_BIN:-} ]]; then
-	require_commands "${CPU_LOAD_HELPER_BIN}"
-	cp "${CPU_LOAD_HELPER_BIN}" "${CPU_STAT_LOAD}"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPU_STAT_LOAD}" "${ROOT_DIR}/e2e/testdata/test_cpu_load.go"
-fi
+cpu_load_prepare "${CPU_STAT_DIR}"
 
 CPU_STAT_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
 CPU_STAT_CPU=$(awk '/Cpus_allowed_list/ { n=split($2, cpus, /[-,]/); print cpus[n] }' /proc/self/status)
@@ -146,6 +141,10 @@ cpu_stat_command() {
 	cpu_stat_generation=$((cpu_stat_generation + 1))
 	printf '%s %s %s %s\n' "${mode}" "${milli}" "${workers}" "${cpu_stat_generation}" > "${CPU_STAT_DIR}/${name}.command.next"
 	mv "${CPU_STAT_DIR}/${name}.command.next" "${CPU_STAT_DIR}/${name}.command"
+	if [[ ${name} == host && -n ${cpu_stat_host_pid} ]]; then
+		wait_until 10 1 cpu_load_ready "${CPU_STAT_DIR}/host-workload.log" "${cpu_stat_generation}" \
+			|| fatal "host stress-ng workload did not acknowledge its command"
+	fi
 }
 
 cpu_stat_command_ready() {
@@ -155,7 +154,7 @@ cpu_stat_command_ready() {
 cpu_stat_settled_phase() {
 	local name=$1 phase=$2
 	cpu_stat_command "${name}" idle 0
-	# The load helper acknowledges only after cancelling and joining workers.
+	# Acknowledge idle only after stress-ng has reaped its workers.
 	wait_until 10 1 cpu_stat_command_ready "${name}" "${cpu_stat_generation}" \
 		|| fatal "workers did not stop in Pod ${name}; inspect its worker logs"
 	cpu_stat_target "${name}" 0 -1 | jq -s '.' > "${CPU_STAT_DIR}/quota-targets.json"
@@ -330,7 +329,7 @@ if [[ ${cpu_stat_wait} == true ]]; then
 	for percent in 20 40; do
 		cpu_stat_command host user "$((percent * 10))"
 		cpu_stat_single_phase "host-contention-${percent}" "$((100 - percent))" "${percent}" \
-			--worker-pid "${cpu_stat_host_pid}" --worker-cpu "${percent}"
+			--worker-pid "$(cpu_load_worker_pid "${CPU_STAT_DIR}/host-workload.log" "${cpu_stat_generation}")" --worker-cpu "${percent}"
 	done
 	stop_and_wait_by_pid "${cpu_stat_host_pid}" || fatal "host competitor did not exit cleanly"
 	cpu_stat_host_pid=""
