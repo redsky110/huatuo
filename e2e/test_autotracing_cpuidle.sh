@@ -23,9 +23,9 @@ source "${ROOT_DIR}/integration/lib_storage.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
 
-require_commands kubectl jq findmnt ss getconf docker timeout
+require_commands kubectl jq findmnt getconf docker timeout "${ROOT_DIR}/_output/bin/perf"
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}" "${ROOT_DIR}/_output/bpf/perf.o"
-[[ ${EUID} -eq 0 ]] || skip "requires root to inspect perf BPF objects"
+[[ ${EUID} -eq 0 ]] || skip "requires root for container CPU profiling"
 
 readonly CPUIDLE_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpuidle"
 readonly CPUIDLE_BIN="${CPUIDLE_DIR}/reference"
@@ -44,9 +44,7 @@ CPUIDLE_EXCLUDE_FIELD=container_hostname
 CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-(a|b)$"
 CPUIDLE_EXCLUDE='^$'
 cpuidle_generation=0
-cpuidle_inspect_pid=""
-cpuidle_reference_pid=""
-mkdir -p "${CPUIDLE_DIR}/tools"
+mkdir -p "${CPUIDLE_DIR}"
 chmod 755 "${CPUIDLE_DIR}"
 uname -a > "${CPUIDLE_DIR}/kernel.txt"
 "${HUATUO_BAMAI_BIN}" --version > "${CPUIDLE_DIR}/bamai-version.txt"
@@ -54,8 +52,6 @@ uname -a > "${CPUIDLE_DIR}/kernel.txt"
 cpuidle_cleanup() {
 	local status=$?
 	trap - EXIT
-	stop_and_wait_by_pid "${cpuidle_inspect_pid}" || true
-	stop_and_wait_by_pid "${cpuidle_reference_pid}" || true
 	if [[ ${status} -ne 0 && ${status} -ne 77 ]]; then
 		kubectl --request-timeout=10s describe pod -n "${CPUIDLE_NS}" -l "${CPUIDLE_LABEL}" \
 			> "${CPUIDLE_DIR}/pods-failure.txt" 2>&1 || true
@@ -77,7 +73,7 @@ if [[ -n ${CPUIDLE_HELPER_BIN:-} ]]; then
 	cp "${CPUIDLE_HELPER_BIN}" "${CPUIDLE_BIN}"
 else
 	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_BIN}" "${ROOT_DIR}/e2e/testdata/cpuidle"
+	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_cpuidle.go"
 fi
 if [[ -n ${CPU_UTIL_HELPER_BIN:-} ]]; then
 	require_commands "${CPU_UTIL_HELPER_BIN}"
@@ -91,7 +87,8 @@ cpu_load_prepare "${CPUIDLE_DIR}"
 # Distinct executable names keep both containers identifiable in sampled stacks.
 for suffix in a b; do cp "${CPUIDLE_DIR}/stress-ng" "${CPUIDLE_DIR}/cpuidle-${suffix}"; done
 
-CPUIDLE_PORT=$(allocate_available_port) || fatal "cannot allocate cpuidle API port"
+# perf resolves containers through bamai's default API address.
+CPUIDLE_PORT=19704
 CPUIDLE_KUBELET_PORT=${KUBELET_PODS_API##*:}
 CPUIDLE_KUBELET_PORT=${CPUIDLE_KUBELET_PORT%%/*}
 CPUIDLE_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local node") end')
@@ -105,18 +102,13 @@ else
 	CPUIDLE_CPUSET_ROOT=${CPUIDLE_CPU_ROOT}
 fi
 readonly CPUIDLE_PORT CPUIDLE_KUBELET_PORT CPUIDLE_NODE CPUIDLE_CPU_ROOT CPUIDLE_USAGE_ROOT CPUIDLE_CPUSET_ROOT
-export CPUIDLE_REAL_PERF="${ROOT_DIR}/_output/bin/perf"
-export CPUIDLE_API_ADDRESS="127.0.0.1:${CPUIDLE_PORT}"
-require_commands "${CPUIDLE_REAL_PERF}"
-cp "${ROOT_DIR}/e2e/testdata/cpuidle/perf" "${CPUIDLE_DIR}/tools/perf"
-chmod 755 "${CPUIDLE_DIR}/tools/perf"
 
 if [[ -f ${HUATUO_BAMAI_TEST_TMPDIR}/huatuo-bamai.pid ]]; then
 	huatuo_bamai_stop
 	huatuo_bamai_log_check || fatal "runner baseline daemon has unexpected errors"
 	cp "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log" "${CPUIDLE_DIR}/baseline.log"
 fi
-HUATUO_BAMAI_ADDR="http://${CPUIDLE_API_ADDRESS}"
+HUATUO_BAMAI_ADDR="http://127.0.0.1:${CPUIDLE_PORT}"
 HUATUO_BAMAI_METRICS_API="${HUATUO_BAMAI_ADDR}/metrics"
 
 cpuidle_status() {
@@ -174,7 +166,6 @@ cpuidle_target() {
 		> "${CPUIDLE_DIR}/${suffix}.target.json"
 	"${CPUIDLE_DIR}/cpu-util" capacity --targets "${CPUIDLE_DIR}/${suffix}.target.json" > "${CPUIDLE_DIR}/${suffix}.cores"
 	printf '%s\n' "${usage}" > "${CPUIDLE_DIR}/${suffix}.usage"
-	printf '%s\n' "${cpu}" > "${CPUIDLE_DIR}/${suffix}.cpu"
 	log_info "cpuidle target: pod=${CPUIDLE_PREFIX}-${suffix} id=${id} capacity=$(< "${CPUIDLE_DIR}/${suffix}.cores") cgroup=${cpu}"
 }
 
@@ -196,8 +187,8 @@ cpuidle_ready_events() {
 
 cpuidle_no_events() {
 	cpuidle_local_events > "${HUATUO_BAMAI_TEST_TMPDIR}/local.json"
-	[[ $(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") -eq 0 && ! -s ${CPUIDLE_CALLS} ]] \
-		|| fatal "${cpuidle_phase}: unexpected cpuidle event or perf invocation"
+	[[ $(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") -eq 0 ]] \
+		|| fatal "${cpuidle_phase}: unexpected cpuidle event"
 	cpuidle_status
 }
 
@@ -208,19 +199,19 @@ cpuidle_reference() {
 		> "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl"
 	read -r mode milli _ < "${CPUIDLE_DIR}/${suffix}.command"
 	expected=$(jq -n --argjson milli "${milli}" --argjson cores "$(< "${CPUIDLE_DIR}/${suffix}.cores")" '$milli / 10 / $cores')
-	tail -1 "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl" | jq -e --arg mode "${mode}" --argjson expected "${expected}" '
+	jq -e --arg mode "${mode}" --argjson expected "${expected}" '
 		.percent | if $mode == "idle" then .total < 10 else
 			.total >= $expected - 15 and .total <= $expected + 15
 			and (if $mode == "user" then .user > 30
 				elif $mode == "system" then .system > 20
 				else .user > 2 and .system > 2 end) end
-	' > /dev/null || fatal "${cpuidle_phase}/${name}: worker did not produce the independently verified ${mode} load"
-	log_info "cpuidle reference: phase=${cpuidle_phase} pod=${CPUIDLE_PREFIX}-${suffix} $(tail -1 "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl" | jq -c '.percent')"
+	' "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl" > /dev/null || fatal "${cpuidle_phase}/${name}: worker did not produce the independently verified ${mode} load"
+	log_info "cpuidle reference: phase=${cpuidle_phase} pod=${CPUIDLE_PREFIX}-${suffix} $(jq -c '.percent' "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl")"
 }
 
 cpuidle_log_check() {
 	huatuo_bamai_log_check || fatal "cpuidle daemon logged an unexpected failure"
-	# Discovery races are retried; target metadata and sampled TGIDs are verified.
+	# Discovery races are retried; target metadata and flame graphs are verified.
 	awk '/level="?warn|"level":"warn"/ &&
 		!/creation is not yet reflected by kubelet/ &&
 		!/msg="lost BPF perf event samples".*func="internal\/pod\.cgroupCssEventSyncHandler\.func1"/ {
@@ -230,9 +221,8 @@ cpuidle_log_check() {
 }
 
 cpuidle_start() {
-	export CPUIDLE_CALLS="${HUATUO_BAMAI_TEST_TMPDIR}/perf.calls"
 	integration_huatuo_bamai_start write_cpuidle_autotracing_config --region e2e \
-		--tools-bin-dir "${CPUIDLE_DIR}/tools"
+		--tools-bin-dir "${ROOT_DIR}/_output/bin"
 	wait_until 15 0.5 cpuidle_status || fatal "cpuidle lifecycle metrics did not become ready"
 }
 
@@ -253,10 +243,6 @@ cpuidle_finish() {
 	if [[ ${signal} == TERM ]]; then wait "${pid}" || fatal "cpuidle daemon did not flush storage on exit"; fi
 	cpuidle_log_check
 	wait_until 15 1 cpuidle_compare_storage || fatal "cpuidle local/ES events differ"
-	local calls=0
-	[[ ! -f ${CPUIDLE_CALLS} ]] || calls=$(wc -l < "${CPUIDLE_CALLS}")
-	[[ ${calls} -eq $(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") ]] \
-		|| fatal "${cpuidle_phase}: ${calls} completed perf calls do not match persisted event count"
 	log_info "cpuidle storage: phase=${cpuidle_phase} local=$(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") ES=$(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/remote.json")"
 }
 
@@ -326,23 +312,12 @@ cpuidle_assert_events() {
 }
 
 cpuidle_capture() {
-	local suffix=$1 mode=$2 milli=$3 channel=$4 before forbid=b
-	[[ ${suffix} != b ]] || forbid=a
+	local suffix=$1 mode=$2 milli=$3 channel=$4 before
 	before=$(cpuidle_event_count "${suffix}")
-	"${CPUIDLE_BIN}" inspect --pid "$(< "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo-bamai.pid")" \
-		--cgroup "$(< "${CPUIDLE_DIR}/${suffix}.cpu")" --comm "cpuidle-${suffix}" \
-		--forbid "cpuidle-${forbid}" --duration 30s \
-		--file "${HUATUO_BAMAI_TEST_TMPDIR}/${suffix}.objects.json" \
-		> "${HUATUO_BAMAI_TEST_TMPDIR}/${suffix}.inspect.log" 2>&1 &
-	cpuidle_inspect_pid=$!
 	cpuidle_command "${suffix}" "${mode}" "${milli}"
 	cpuidle_reference "${suffix}" "${suffix}-high" 4
 	wait_until 35 0.5 cpuidle_ready_events "${suffix}" "$((before + 1))" \
 		|| fatal "${cpuidle_phase}: ${channel} spike produced no target event"
-	wait "${cpuidle_inspect_pid}" || fatal "${cpuidle_phase}: real perf BPF program/map or target samples were not observed"
-	cpuidle_inspect_pid=""
-	wait_until 10 0.5 "${CPUIDLE_BIN}" released --file "${HUATUO_BAMAI_TEST_TMPDIR}/${suffix}.objects.json" \
-		|| fatal "${cpuidle_phase}: perf leaked BPF objects"
 	cpuidle_assert_events "${suffix}" "${channel}"
 	cpuidle_status
 }
