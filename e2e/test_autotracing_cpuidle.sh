@@ -370,7 +370,7 @@ cpuidle_capture a user 300 user
 cpuidle_finish
 
 # getpid splits time between user and kernel; leave room for a split sampling step.
-CPUIDLE_THRESHOLDS=(100 15 100 100 5 100)
+CPUIDLE_THRESHOLDS=(100 10 100 100 3 100)
 CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-b$"
 cpuidle_begin system
 cpuidle_capture b system 600 system
