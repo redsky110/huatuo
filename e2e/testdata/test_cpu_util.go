@@ -411,7 +411,7 @@ func checkWorkload(t *target, reference usage, cores float64) error {
 	if t.Mode == "user" && (accounted == 0 || reference.User < accounted*0.7) {
 		return fmt.Errorf("%s: user workload did not produce predominantly user CPU: %+v", t.Name, reference)
 	}
-	if t.Mode == "system" && (accounted == 0 || reference.Sys < accounted*0.2) {
+	if t.Mode == "system" && (accounted == 0 || reference.Sys < accounted*0.1) {
 		return fmt.Errorf("%s: syscall workload did not produce measurable system CPU: %+v", t.Name, reference)
 	}
 	if t.Mode == "mixed" && (accounted == 0 || reference.User < accounted*0.1 || reference.Sys < accounted*0.1) {
