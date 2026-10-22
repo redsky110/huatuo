@@ -199,11 +199,12 @@ cpuidle_reference() {
 		> "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl"
 	read -r mode milli _ < "${CPUIDLE_DIR}/${suffix}.command"
 	expected=$(jq -n --argjson milli "${milli}" --argjson cores "$(< "${CPUIDLE_DIR}/${suffix}.cores")" '$milli / 10 / $cores')
-	jq -e --arg mode "${mode}" --argjson expected "${expected}" '
+	jq -e --arg mode "${mode}" --argjson expected "${expected}" \
+		--argjson system_threshold "${CPUIDLE_THRESHOLDS[1]}" '
 		.percent | if $mode == "idle" then .total < 10 else
 			.total >= $expected - 15 and .total <= $expected + 15
 			and (if $mode == "user" then .user > 30
-				elif $mode == "system" then .system > 20
+					elif $mode == "system" then .system > $system_threshold
 				else .user > 2 and .system > 2 end) end
 	' "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl" > /dev/null || fatal "${cpuidle_phase}/${name}: worker did not produce the independently verified ${mode} load"
 	log_info "cpuidle reference: phase=${cpuidle_phase} pod=${CPUIDLE_PREFIX}-${suffix} $(jq -c '.percent' "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl")"
