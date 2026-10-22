@@ -35,10 +35,11 @@ if [[ ! -f ${directory}/source/Makefile ]]; then
 	tar -xzf "${archive}" --strip-components=1 -C "${directory}/source"
 fi
 # Static glibc's gethostid can load incompatible NSS libraries in BusyBox.
-# Regenerate cached configuration before disabling its probe.
+# Target clones can select CPU instructions masked by the VM.
+# Regenerate cached configuration before disabling these probes.
 make -C "${directory}/source" cleanconfig
 make -C "${directory}/source" -f Makefile.config -j"${BUILD_JOBS:-2}" \
-	STATIC=1 VERSION="${version}" -o GETHOSTID
+	STATIC=1 VERSION="${version}" -o GETHOSTID -o TARGET_CLONES
 make -C "${directory}/source" -j"${BUILD_JOBS:-2}" STATIC=1
 cp "${directory}/source/stress-ng" "${repo}/_output/bin/stress-ng"
 "${repo}/_output/bin/stress-ng" --version
