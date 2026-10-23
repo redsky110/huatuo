@@ -21,6 +21,7 @@ source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
+source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
 
 require_commands kubectl jq findmnt ss getconf
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
@@ -60,6 +61,7 @@ trap cpu_util_cleanup EXIT
 [[ -x ${CPU_UTIL_BIN} ]] || fatal "test helper is not executable: ${CPU_UTIL_BIN}; run make build"
 
 cpu_load_prepare "${CPU_UTIL_DIR}"
+cpu_metrics_prepare
 
 # The runner changes the UTS hostname; kubelet identifies the actual local node.
 CPU_UTIL_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
@@ -174,13 +176,17 @@ cpu_util_target() {
 }
 
 cpu_util_host_target() {
-	local pid=${cpu_util_host_pid:-0}
-	if [[ ${pid} != 0 && $1 != idle ]]; then
-		pid=$(cpu_load_worker_pid "${CPU_UTIL_DIR}/host-workload.log" "${cpu_util_generation}") || return 1
+	local pids='[]'
+	if [[ -n ${cpu_util_host_pid} ]]; then
+		if [[ $1 == idle ]]; then
+			pids="[${cpu_util_host_pid}]"
+		else
+			pids=$(cpu_load_worker_pids "${CPU_UTIL_DIR}/host-workload.log" "${cpu_util_generation}" | jq -s '.') || return 1
+		fi
 	fi
 	jq -n --arg path "${CPU_UTIL_USAGE_ROOT}" --arg mode "$1" --argjson expected "$2" \
-		--argjson pid "${pid}" \
-		'{Name: "host", UsagePath: $path, ExpectedMilli: -1, Mode: "", WorkerPID: $pid, WorkerMode: $mode, WorkerExpectedMilli: $expected}'
+		--argjson pids "${pids}" \
+		'{Name: "host", UsagePath: $path, ExpectedMilli: -1, Mode: "", WorkerPIDs: $pids, WorkerMode: $mode, WorkerExpectedMilli: $expected}'
 }
 
 assert_cpu_util_logs() {
@@ -188,6 +194,45 @@ assert_cpu_util_logs() {
 	tail -n "+${start}" "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log" > "${CPU_UTIL_DIR}/steady.log"
 	! grep -E 'cpu (quota|capacity|usage|cache):|host cpu usage:|level="?(error|panic|fatal)"?|panic:' "${CPU_UTIL_DIR}/steady.log" \
 		|| fatal "unexpected cpu_util/daemon diagnostic during a stable measurement"
+}
+
+assert_cpu_util_samples() {
+	local file=$1
+	jq -e --arg host "$(hostname)" "${CPU_METRICS_JQ}"'
+		.Targets as $targets | ($targets | length) > 0 and (.Samples | length) >= 2
+		and all(.Samples[]; . as $s | collector_ok(.Families; "cpu_util")
+   and all(range(0; $targets | length); . as $i | $targets[$i] as $t |
+    (if $t.Pod == "" then {host: $host, region: "e2e"} else container_labels($t; $host) end) as $labels |
+    ("huatuo_bamai_cpu_util_" + (if $t.Pod == "" then "" else "container_" end)) as $prefix |
+    all(["usr","sys","total"][]; . as $field | cpu_metric($s.Families[$prefix + $field]; $labels) <= 100)
+    and (if $t.Pod == "" then true else
+     (cpu_metric($s.Families[$prefix + "cores"]; $labels) - $s.Cores[$i] | fabs) < 0.000001
+     and ($s.QuotaMilli[$i] - $t.QuotaMilli | fabs) <= 0.01 end)))
+ ' "${file}" > /dev/null || fatal "cpu_util metric type, labels, capacity or 0..100 range is invalid; inspect ${file}"
+}
+
+assert_cpu_util_result() {
+	local file=$1
+	jq -r '.[] | "\(.Target.Name) cores=\(.Cores) seconds=\(.Seconds) metrics=\(.Metrics) reference=\(.Reference)",
+  (if (.Target.WorkerPIDs | length) > 0 then "host worker pids=\(.Target.WorkerPIDs) usage=\(.Worker) theoretical-increment=\(.WorkerIncrement) percentage points" else empty end)' "${file}"
+	jq -e '
+  def workload($mode; $expected; $r; $cores):
+   ($r.User + $r.Sys) as $accounted |
+   ($expected < 0 or (($r.Total * $cores * 10 - $expected | fabs) <= ([10, $expected * 0.15] | max)))
+   and (if $mode == "user" then $accounted > 0 and $r.User >= $accounted * 0.7
+    elif $mode == "system" then $accounted > 0 and $r.Sys >= $accounted * 0.1
+    elif $mode == "mixed" then $accounted > 0 and $r.User >= $accounted * 0.1 and $r.Sys >= $accounted * 0.1
+    else true end);
+  all(.[]; . as $r |
+   all(["User","Sys","Total"][]; . as $field |
+    ($r.Metrics[$field] - $r.Reference[$field] | fabs) <= ([1, $r.Reference[$field] * 0.05] | max))
+   and workload(.Target.Mode; .Target.ExpectedMilli; .Reference; .Cores)
+   and (if (.Target.WorkerPIDs | length) > 0 then workload(.Target.WorkerMode; .Target.WorkerExpectedMilli; .Worker; 1) else true end))
+ ' "${file}" > /dev/null || fatal "cpu_util metrics/reference or workload classification differs; inspect ${file}"
+}
+
+cpu_util_absent() {
+	assert_cpu_metrics_absent cpu_util "$1"
 }
 
 cpu_util_measure() {
@@ -201,6 +246,8 @@ cpu_util_measure() {
 	"${CPU_UTIL_BIN}" measure --url "${HUATUO_BAMAI_METRICS_API}" --targets "${targets}" \
 		--ticks "${CPU_UTIL_TICKS}" --output "${CPU_UTIL_DIR}/${phase}" \
 		2>&1 | tee "${CPU_UTIL_DIR}/${phase}.log"
+	assert_cpu_util_samples "${CPU_UTIL_DIR}/${phase}/samples.json"
+	assert_cpu_util_result "${CPU_UTIL_DIR}/${phase}/result.json"
 	assert_cpu_util_logs "${start}"
 }
 
@@ -264,7 +311,7 @@ cpu_util_command istio-proxy idle 0
 cpu_util_create DaemonSet "${CPU_UTIL_PREFIX}-daemonset" 1000m "ds-${CPU_UTIL_PREFIX}"
 daemonset_pod=$(cpu_util_pod "${CPU_UTIL_PREFIX}-daemonset")
 cpu_util_target "${daemonset_pod}" "ds-${CPU_UTIL_PREFIX}" 1000 idle 0 daemonSet | jq -s '.' > "${CPU_UTIL_DIR}/excluded.json"
-"${CPU_UTIL_BIN}" absent --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_UTIL_DIR}/excluded.json"
+cpu_util_absent "${CPU_UTIL_DIR}/excluded.json"
 
 cpu_util_command host idle 0
 "${CPU_UTIL_LOAD}" host --control "${CPU_UTIL_DIR}/host.command" > "${CPU_UTIL_DIR}/host-workload.log" 2>&1 &
@@ -282,10 +329,11 @@ cpu_util_command half mixed 250
 cpu_util_target "${half_pod}" half 500 mixed 250 | jq -s '.' > "${CPU_UTIL_DIR}/concurrent-targets.json"
 cpu_util_concurrent_start=$(($(wc -l < "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log") + 1))
 "${CPU_UTIL_BIN}" concurrent --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_UTIL_DIR}/concurrent-targets.json" \
-	> "${CPU_UTIL_DIR}/concurrent-requests.log" 2>&1 &
+	> "${CPU_UTIL_DIR}/concurrent-samples.json" 2> "${CPU_UTIL_DIR}/concurrent-requests.log" &
 cpu_util_concurrent_pid=$!
 wait "${cpu_util_concurrent_pid}" || fatal "concurrent metrics queries failed"
 cpu_util_concurrent_pid=""
+assert_cpu_util_samples "${CPU_UTIL_DIR}/concurrent-samples.json"
 assert_cpu_util_logs "${cpu_util_concurrent_start}"
 # Parallel scrapes refresh the cache between samples, invalidating the reference window.
 cpu_util_measure concurrent "$(cpu_util_host_target idle -1)" "$(cpu_util_target "${half_pod}" half 500 mixed 250)"
@@ -323,7 +371,7 @@ old_id=$(kubelet_container_ids "${CPU_UTIL_NS}" "^${half_pod}$")
 cpu_util_target "${half_pod}" half 500 mixed 250 | jq -s '.' > "${CPU_UTIL_DIR}/deleted-target.json"
 kubectl delete pod -n "${CPU_UTIL_NS}" "${half_pod}" --timeout=30s
 assert_huatuo_bamai_containers_absent "deleted test Pod" "${old_id}"
-wait_until 30 2 "${CPU_UTIL_BIN}" absent --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_UTIL_DIR}/deleted-target.json" \
+wait_until 30 2 cpu_util_absent "${CPU_UTIL_DIR}/deleted-target.json" \
 	|| fatal "deleted Pod still exports CPU metrics"
 cpu_util_create Pod "${CPU_UTIL_PREFIX}-half" 500m half
 half_pod=$(cpu_util_pod "${CPU_UTIL_PREFIX}-half")
@@ -331,7 +379,7 @@ cpu_util_container_phase pod-recreated "${half_pod}" half 500 user 250 250
 
 cpu_util_disabled=true
 cpu_util_restart_daemon
-"${CPU_UTIL_BIN}" disabled --url "${HUATUO_BAMAI_METRICS_API}"
+assert_cpu_collector_disabled cpu_util || fatal "blacklisted cpu_util still exports metrics"
 cpu_util_disabled=false
 cpu_util_restart_daemon
 cpu_util_container_phase blacklist-reenabled "${half_pod}" half 500 user 250 250

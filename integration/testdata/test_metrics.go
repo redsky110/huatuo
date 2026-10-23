@@ -23,17 +23,6 @@ import (
 	"time"
 )
 
-type metricSample struct {
-	Labels map[string]string `json:"labels"`
-	Value  float64           `json:"value"`
-}
-
-type metricFamily struct {
-	Type    string         `json:"type"`
-	Help    string         `json:"help"`
-	Samples []metricSample `json:"samples"`
-}
-
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, "metrics reader:", err)
@@ -48,17 +37,5 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	result := make(map[string]metricFamily, len(families))
-	for name, family := range families {
-		f := metricFamily{Type: family.GetType().String(), Help: family.GetHelp(), Samples: make([]metricSample, 0, len(family.GetMetric()))}
-		for _, metric := range family.GetMetric() {
-			if metric.Gauge != nil {
-				f.Samples = append(f.Samples, metricSample{Labels: labels(metric), Value: metric.GetGauge().GetValue()})
-			} else if metric.Counter != nil {
-				f.Samples = append(f.Samples, metricSample{Labels: labels(metric), Value: metric.GetCounter().GetValue()})
-			}
-		}
-		result[name] = f
-	}
-	return json.NewEncoder(os.Stdout).Encode(result)
+	return json.NewEncoder(os.Stdout).Encode(metricJSON(families))
 }

@@ -69,3 +69,23 @@ def collector_ok($families; $collector):
  [$f.samples[]? | select(.labels.collector == $collector)] as $rows |
  $f.type == "GAUGE" and ($rows | length) == 1 and $rows[0].value == 1;
 '
+
+assert_cpu_metrics_absent() {
+	local collector=$1 targets=$2 file="${HUATUO_BAMAI_TEST_TMPDIR}/absent-${BASHPID}.json"
+	cpu_metrics_read "${file}" || return 1
+	jq -e --arg prefix "huatuo_bamai_${collector}_" --slurpfile targets "${targets}" '
+  [. | to_entries[] | select(.key | startswith($prefix)) | .value.samples[]? |
+   .labels as $labels | select(any($targets[0][];
+    .Pod == $labels.container_host and .Container == $labels.container_name
+    and .Namespace == $labels.container_hostnamespace))] | length == 0
+ ' "${file}" > /dev/null
+}
+
+assert_cpu_collector_disabled() {
+	local collector=$1 file="${HUATUO_BAMAI_TEST_TMPDIR}/disabled-${BASHPID}.json"
+	cpu_metrics_read "${file}" || return 1
+	jq -e --arg collector "${collector}" --arg prefix "huatuo_bamai_${collector}_" '
+  (keys | all(.[]; startswith($prefix) | not))
+  and ([.huatuo_bamai_scrape_collector_success.samples[]? | select(.labels.collector == $collector)] | length == 0)
+ ' "${file}" > /dev/null
+}
