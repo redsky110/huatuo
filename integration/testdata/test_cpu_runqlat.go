@@ -381,3 +381,15 @@ func growth(before, after *snapshot, targets []target, zone int, switches string
 	}
 	return nil
 }
+
+func validateLabels(actual, expected map[string]string) error {
+	if len(actual) != len(expected) {
+		return fmt.Errorf("labels=%v, want %v", actual, expected)
+	}
+	for name, want := range expected {
+		if value, ok := actual[name]; !ok || value != want {
+			return fmt.Errorf("label %s=%q, want %q", name, value, want)
+		}
+	}
+	return nil
+}
