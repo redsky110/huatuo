@@ -23,7 +23,7 @@ cpu_metrics_prepare() {
 	else
 		require_commands go
 		CGO_ENABLED=0 go build -mod=vendor -o "${CPU_METRICS_BIN}" \
-			"${ROOT_DIR}/e2e/testdata/test_metrics.go" "${ROOT_DIR}/e2e/testdata/metrics_helpers.go"
+			"${ROOT_DIR}/integration/testdata/test_metrics.go" "${ROOT_DIR}/integration/testdata/metrics_helpers.go"
 	fi
 }
 
