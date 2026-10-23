@@ -21,6 +21,7 @@ source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
+source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
 
 require_commands kubectl jq findmnt ss sysctl taskset getconf
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}" /proc/sys/kernel/sched_schedstats
@@ -65,6 +66,7 @@ trap cpu_stat_cleanup EXIT
 
 [[ -x ${CPU_STAT_BIN} ]] || fatal "test helper is not executable: ${CPU_STAT_BIN}; run make build"
 cpu_load_prepare "${CPU_STAT_DIR}"
+cpu_metrics_prepare
 
 CPU_STAT_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
 CPU_STAT_CPU=$(awk '/Cpus_allowed_list/ { n=split($2, cpus, /[-,]/); print cpus[n] }' /proc/self/status)
@@ -260,6 +262,94 @@ cpu_stat_target() {
 		  ExpectedCPU: $expected_cpu, ExpectedWait: $expected_wait}'
 }
 
+assert_cpu_stat_samples() {
+	local file=$1 concurrent=${2:-false}
+	jq -e --arg host "$(hostname)" --argjson concurrent "${concurrent}" "${CPU_METRICS_JQ}"'
+  .Options as $o | .Targets as $targets | .Samples as $all |
+  ($targets | length) > 0 and ($all | length) >= 2
+  and all(range(0; $all | length); . as $j | $all[$j] as $s |
+   collector_ok($s.Families; "cpu_stat") and all(range(0; $targets | length); . as $i |
+    $targets[$i] as $t | container_labels($t; $host) as $labels |
+    $s.Before[$i].Fields as $before | $s.Raw[$i].Fields as $after |
+    (($before | has("wait_sum")) == $o.Wait) and (($after | has("wait_sum")) == $o.Wait)
+    and all(["nr_throttled","throttled_time","nr_bursts","burst_time","wait_sum_percent"][]; . as $name |
+     $s.Families["huatuo_bamai_cpu_stat_container_" + $name] as $family |
+     [$family.samples[]? | select(.labels | contains($labels))] as $rows |
+     (if $name == "wait_sum_percent" then $o.Wait else $before | has($name) end) as $required |
+     if $required | not then ($rows | length) == 0
+     elif $concurrent and ($rows | length) == 0 then true
+     else cpu_metric($family; $labels) as $n |
+      if $name == "wait_sum_percent" then $n <= 100
+      else ($after | has($name)) and $after[$name] >= $before[$name]
+       and ($concurrent or ($n >= $before[$name] - 1 and $n <= $after[$name] + 1))
+       and (if $concurrent or $j == 0 then true else
+        $after[$name] >= $all[$j - 1].Raw[$i].Fields[$name] and $n >= $all[$j - 1].Metrics[$i][$name] end)
+       and (if $o.CounterMode == "settled" and ($concurrent | not) then
+        $before[$name] == $after[$name] and $n == $after[$name]
+        and (if $j == 0 then true else $after[$name] == $all[$j - 1].Raw[$i].Fields[$name] end)
+        else true end)
+      end
+     end)))
+ ' "${file}" > /dev/null || fatal "cpu_stat metric labels, availability, counter bracket or settled equality is invalid; inspect ${file}"
+	if [[ ${concurrent} == true ]]; then
+		jq -er '
+   .Options as $o | .Targets as $targets | .Samples as $samples |
+   [$samples[] | . as $s | select(all(range(0; $targets | length); . as $i |
+    all(["nr_throttled","throttled_time","nr_bursts","burst_time","wait_sum_percent"][]; . as $name |
+     (if $name == "wait_sum_percent" then $o.Wait else $s.Raw[$i].Fields | has($name) end) as $required |
+     ($required | not) or ($s.Metrics[$i] | has($name)))))] | length as $complete |
+   if $complete > 0 then "concurrent requests=\($samples | length) complete=\($complete) refresh-window omissions=\(($samples | length) - $complete)"
+   else error("concurrent scrapes produced no complete cpu_stat sample") end
+  ' "${file}"
+	fi
+}
+
+cpu_stat_log_samples() {
+	jq -r '
+  select(.Options.CounterMode != "unthrottled") | .Samples as $all | .Targets as $targets |
+  range(0; $all | length) as $j | range(0; $targets | length) as $i |
+  ["nr_throttled","throttled_time","nr_bursts","burst_time"][] as $name |
+  $all[$j].Raw[$i].Fields as $raw | $all[$j].Metrics[$i] as $metric |
+  if $raw | has($name) then
+   "\($targets[$i].Pod) sample=\($j) \($name) metric=\($metric[$name]) reference=\($raw[$name]) metric_delta=\(if $j == 0 then 0 else $metric[$name] - $all[$j - 1].Metrics[$i][$name] end) reference_delta=\(if $j == 0 then 0 else $raw[$name] - $all[$j - 1].Raw[$i].Fields[$name] end)"
+  else "\($targets[$i].Pod) sample=\($j) \($name)=unavailable" end
+ ' "$1"
+}
+
+assert_cpu_stat_result() {
+	local file=$1
+	# Under contention, stress-ng may consume less CPU than its requested load.
+	# Both tasks stay on one CPU, so the competitor's CPU time predicts Pod wait.
+	# Require contention above the 2 pp metric/reference comparison tolerance.
+	jq -r 'select(.Options.WorkerPID > 0) |
+  "host worker cpu=\(.WorkerCPU)% expected_pod_cpu=\(100 - .WorkerCPU)% expected_pod_wait=\(.WorkerCPU)%"' "${file}"
+	jq -r '.Options as $o | .Windows[] |
+  "\(.Target.Pod) seconds=\(.Seconds) cpu=\(.CPU)% wait_metric=\(.WaitMetric)% wait_reference=\(.WaitReference)%",
+  (if $o.CounterMode != "unthrottled" then .Deltas | to_entries[] | "delta_\(.key)=\(.value)" else empty end)' "${file}"
+	jq -e '
+  .Options as $o | .WorkerCPU as $worker |
+  all(.Windows[];
+   (if $o.WorkerPID > 0 then 100 - $worker else .Target.ExpectedCPU end) as $cpu |
+   (if $o.WorkerPID > 0 then $worker else .Target.ExpectedWait end) as $wait |
+   ($cpu < 0 or (.CPU - $cpu | fabs) <= 10)
+   and (if $o.Wait and ($o.CounterOnly | not) then
+    (.WaitMetric - .WaitReference | fabs) <= 2
+    and ($wait < 0 or (.WaitReference - $wait | fabs) <= 10) else true end)
+   and (.Deltas | has("nr_throttled") and has("throttled_time"))
+   and (if $o.CounterMode == "burst" then .Deltas | has("nr_bursts") and has("burst_time") else true end)
+   and (.Deltas | to_entries | all(.[];
+    (.key == "nr_throttled" or .key == "throttled_time") as $throttle |
+    .value >= 0
+    and (if ($o.CounterMode == "throttled" and $throttle) or ($o.CounterMode == "burst" and ($throttle | not)) then .value > 0 else true end)
+    and (if $o.CounterMode == "stable" or $o.CounterMode == "settled" or ($o.CounterMode == "unthrottled" and $throttle) then .value == 0 else true end))))
+  and (if $o.WorkerPID > 0 then $worker > 2 and $worker <= 100 else true end)
+ ' "${file}" > /dev/null || fatal "cpu_stat workload, wait percentage or throttle/burst growth differs; inspect ${file}"
+}
+
+cpu_stat_absent() {
+	assert_cpu_metrics_absent cpu_stat "$1"
+}
+
 cpu_stat_measure() {
 	local phase=$1 targets=$2 start
 	shift 2
@@ -267,6 +357,9 @@ cpu_stat_measure() {
 	log_info "cpu_stat phase: ${phase}"
 	"${CPU_STAT_BIN}" measure --url "${HUATUO_BAMAI_METRICS_API}" --targets "${targets}" --wait="${cpu_stat_wait}" \
 		--ticks "${CPU_STAT_TICKS}" --output "${CPU_STAT_DIR}/${phase}" "$@" 2>&1 | tee "${CPU_STAT_DIR}/${phase}.log"
+	cpu_stat_log_samples "${CPU_STAT_DIR}/${phase}/samples.json" | tee -a "${CPU_STAT_DIR}/${phase}.log"
+	assert_cpu_stat_samples "${CPU_STAT_DIR}/${phase}/samples.json"
+	assert_cpu_stat_result "${CPU_STAT_DIR}/${phase}/result.json" 2>&1 | tee -a "${CPU_STAT_DIR}/${phase}.log"
 	tail -n "+${start}" "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log" > "${CPU_STAT_DIR}/steady.log"
 	! grep -E 'failed to update cpu info|cpu_stat:|level="?(error|panic|fatal)"?|panic:' "${CPU_STAT_DIR}/steady.log" \
 		|| fatal "unexpected cpu_stat/daemon diagnostic during stable measurement"
@@ -312,8 +405,8 @@ if [[ ${cpu_stat_wait} == true ]]; then
 	cpu_stat_host_pid=$!
 	for percent in 20 40; do
 		cpu_stat_command host user "$((percent * 10))"
-		cpu_stat_single_phase "host-contention-${percent}" "$((100 - percent))" "${percent}" \
-			--worker-pid "$(cpu_load_worker_pid "${CPU_STAT_DIR}/host-workload.log" "${cpu_stat_generation}")" --worker-cpu "${percent}"
+		cpu_stat_single_phase "host-contention-${percent}" -1 -1 \
+			--worker-pid "$(cpu_load_worker_pid "${CPU_STAT_DIR}/host-workload.log" "${cpu_stat_generation}")"
 	done
 	stop_and_wait_by_pid "${cpu_stat_host_pid}" || fatal "host competitor did not exit cleanly"
 	cpu_stat_host_pid=""
@@ -366,7 +459,7 @@ old_id=$(kubelet_container_ids "${CPU_STAT_NS}" "^${a}$")
 cpu_stat_target "${a}" -1 -1 | jq -s '.' > "${CPU_STAT_DIR}/deleted-target.json"
 kubectl delete pod -n "${CPU_STAT_NS}" "${a}" --timeout=30s
 assert_huatuo_bamai_containers_absent "deleted cpu_stat Pod" "${old_id}"
-wait_until 30 2 "${CPU_STAT_BIN}" absent --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_STAT_DIR}/deleted-target.json" \
+wait_until 30 2 cpu_stat_absent "${CPU_STAT_DIR}/deleted-target.json" \
 	|| fatal "deleted Pod still exports cpu_stat metrics"
 cpu_stat_create "${a}" 2
 cpu_stat_command "${a}" user 1000
@@ -374,12 +467,13 @@ cpu_stat_single_phase pod-recreated 100 0
 
 cpu_stat_disabled=true
 cpu_stat_restart_daemon
-"${CPU_STAT_BIN}" disabled --url "${HUATUO_BAMAI_METRICS_API}"
+assert_cpu_collector_disabled cpu_stat || fatal "blacklisted cpu_stat still exports metrics"
 cpu_stat_disabled=false
 cpu_stat_restart_daemon
 cpu_stat_single_phase blacklist-reenabled 100 0
 
 # Keep concurrent scrapes outside numeric windows: they advance the baseline.
 "${CPU_STAT_BIN}" concurrent --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_STAT_DIR}/targets.json" \
-	--wait="${cpu_stat_wait}" --ticks "${CPU_STAT_TICKS}" 2>&1 | tee "${CPU_STAT_DIR}/concurrent.log"
+	--wait="${cpu_stat_wait}" --ticks "${CPU_STAT_TICKS}" > "${CPU_STAT_DIR}/concurrent-samples.json" 2> "${CPU_STAT_DIR}/concurrent.log"
+assert_cpu_stat_samples "${CPU_STAT_DIR}/concurrent-samples.json" true
 log_info "cpu_stat E2E passed; artifacts: ${CPU_STAT_DIR}"

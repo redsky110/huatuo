@@ -16,18 +16,6 @@
 
 set -euo pipefail
 
-# Keep observing after a successful sample so late failures are still detected.
-cpu_metrics_observe() {
-	local duration=$1 interval=$2 deadline
-	shift 2
-	deadline=$(($(date +%s%N) + duration * 1000000000))
-	while true; do
-		"$@" || return 1
-		(($(date +%s%N) < deadline)) || return 0
-		sleep "${interval}"
-	done
-}
-
 cpu_metrics_prepare() {
 	CPU_METRICS_BIN=${CPU_METRICS_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-metrics}
 	[[ -x ${CPU_METRICS_BIN} ]] || fatal "CPU metrics helper is not executable: ${CPU_METRICS_BIN}; run make build"
@@ -88,4 +76,16 @@ assert_cpu_collector_disabled() {
   (keys | all(.[]; startswith($prefix) | not))
   and ([.huatuo_bamai_scrape_collector_success.samples[]? | select(.labels.collector == $collector)] | length == 0)
  ' "${file}" > /dev/null
+}
+
+# Keep observing after a successful sample so late failures are still detected.
+cpu_metrics_observe() {
+	local duration=$1 interval=$2 deadline
+	shift 2
+	deadline=$(($(date +%s%N) + duration * 1000000000))
+	while true; do
+		"$@" || return 1
+		(($(date +%s%N) < deadline)) || return 0
+		sleep "${interval}"
+	done
 }
