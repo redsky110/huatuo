@@ -23,6 +23,7 @@ source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/integration/lib_storage.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
+source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
 
 readonly CURL_TIMEOUT=(--connect-timeout 2 --max-time 5)
 readonly DLOAD_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/dload"
@@ -117,11 +118,18 @@ if [[ -n ${DLOAD_HELPER_BIN:-} ]]; then
 	cp "${DLOAD_HELPER_BIN}" "${DLOAD_BIN}"
 else
 	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${DLOAD_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_dload.go" \
-		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go"
+	CGO_ENABLED=0 go build -mod=vendor -o "${DLOAD_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_dload.go"
 fi
-DLOAD_MODE=$("${DLOAD_BIN}" mode)
-DLOAD_FIXTURE_ISSUES=$("${DLOAD_BIN}" issues)
+cpu_metrics_prepare "${DLOAD_DIR}"
+if [[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]]; then
+	DLOAD_MODE=unified
+elif [[ $(stat -fc %T /sys/fs/cgroup/unified 2> /dev/null || true) == cgroup2fs ]]; then
+	DLOAD_MODE=hybrid
+else
+	DLOAD_MODE=legacy
+fi
+# Match test workers without depending on kernel-specific stack frames.
+DLOAD_FIXTURE_ISSUES='[["e2e-unmatched","(?m)^Comm: dload-unmatched\\tPid: [0-9]+$"],["e2e-dload","(?m)^Comm: stress-ng-hdd\\tPid: [0-9]+$"]]'
 DLOAD_PORT=$(allocate_available_port) || fatal "cannot allocate dload metrics port"
 DLOAD_KUBELET_PORT=${KUBELET_PODS_API##*:}
 DLOAD_KUBELET_PORT=${DLOAD_KUBELET_PORT%%/*}
@@ -136,9 +144,9 @@ HUATUO_BAMAI_ADDR="http://127.0.0.1:${DLOAD_PORT}"
 HUATUO_BAMAI_METRICS_API="${HUATUO_BAMAI_ADDR}/metrics"
 
 dload_status() {
-	local args=()
-	[[ ${DLOAD_DISABLED} != true ]] || args+=(--disabled)
-	"${DLOAD_BIN}" status --url "${HUATUO_BAMAI_METRICS_API}" "${args[@]}"
+	local enabled=1
+	[[ ${DLOAD_DISABLED} != true ]] || enabled=0
+	assert_cpu_tracing_status dload "${enabled}"
 }
 
 dload_concurrent_status() {
@@ -322,8 +330,16 @@ dload_local_ready() {
 
 dload_debug_ready() {
 	dload_local_events > "${dload_work}/local.json" || return 1
-	"${DLOAD_BIN}" debug --cooldown "${DLOAD_COOLDOWN}s" < "${dload_work}/local.json" \
-		2> "${dload_work}/debug-check.err"
+	jq -e --argjson cooldown "${DLOAD_COOLDOWN}" '
+		def event_time:
+			capture("^(?<seconds>[^.]+)(?<fraction>\\.[0-9]+)?Z$") |
+			(.seconds + "Z" | fromdateiso8601) + ((.fraction // "0") | tonumber);
+		any(.[]; .tracer_data.dload_avg <= .tracer_data.threshold)
+		and (group_by(.container_id) | any(.[];
+			map(.started_timestamp | event_time) | sort |
+			. as $times | any(range(1; length); . as $i |
+				($times[$i] - $times[$i - 1]) as $elapsed | $elapsed > 0 and $elapsed < $cooldown)))
+	' "${dload_work}/local.json" > /dev/null 2> "${dload_work}/debug-check.err"
 }
 
 dload_remote_events() {
