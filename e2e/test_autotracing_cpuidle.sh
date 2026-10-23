@@ -29,21 +29,21 @@ require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
 [[ ${EUID} -eq 0 ]] || skip "requires root for container CPU profiling"
 
 readonly CPUIDLE_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpuidle"
-readonly CPUIDLE_BIN="${CPUIDLE_DIR}/reference"
+readonly CPUIDLE_BIN=${CPUIDLE_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpuidle-reference}
 readonly CPUIDLE_PREFIX="cpuidle-${BASHPID}-${RANDOM}"
 readonly CPUIDLE_NS="${CPUIDLE_PREFIX}"
 readonly CPUIDLE_LABEL="app=${CPUIDLE_PREFIX}"
 readonly CPUIDLE_INDEX="huatuo_e2e_${CPUIDLE_PREFIX}"
 readonly CPUIDLE_TICKS=$(getconf CLK_TCK)
-CPUIDLE_INTERVAL=2
-CPUIDLE_DURATION=2
-CPUIDLE_COOLDOWN=30
-CPUIDLE_DISABLED=false
-CPUIDLE_THRESHOLDS=(100 100 40 100 100 10)
-CPUIDLE_INCLUDE_FIELD=container_hostname
-CPUIDLE_EXCLUDE_FIELD=container_hostname
-CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-(a|b)$"
-CPUIDLE_EXCLUDE='^$'
+cpuidle_interval=2
+cpuidle_duration=2
+cpuidle_cooldown=30
+cpuidle_disabled=false
+cpuidle_thresholds=(100 100 40 100 100 10)
+cpuidle_include_field=container_hostname
+cpuidle_exclude_field=container_hostname
+cpuidle_include="^${CPUIDLE_PREFIX}-(a|b)$"
+cpuidle_exclude='^$'
 cpuidle_generation=0
 mkdir -p "${CPUIDLE_DIR}"
 chmod 755 "${CPUIDLE_DIR}"
@@ -69,23 +69,11 @@ cpuidle_cleanup() {
 }
 trap cpuidle_cleanup EXIT
 
-if [[ -n ${CPUIDLE_HELPER_BIN:-} ]]; then
-	require_commands "${CPUIDLE_HELPER_BIN}"
-	cp "${CPUIDLE_HELPER_BIN}" "${CPUIDLE_BIN}"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_cpuidle.go"
-fi
-if [[ -n ${CPU_UTIL_HELPER_BIN:-} ]]; then
-	require_commands "${CPU_UTIL_HELPER_BIN}"
-	cp "${CPU_UTIL_HELPER_BIN}" "${CPUIDLE_DIR}/cpu-util"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_DIR}/cpu-util" "${ROOT_DIR}/e2e/testdata/test_cpu_util.go" \
-		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/proc_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
-fi
+[[ -x ${CPUIDLE_BIN} ]] || fatal "test helper is not executable: ${CPUIDLE_BIN}; run make build"
+readonly CPUIDLE_UTIL_BIN=${CPU_UTIL_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-util}
+[[ -x ${CPUIDLE_UTIL_BIN} ]] || fatal "CPU utilization helper is not executable: ${CPUIDLE_UTIL_BIN}; run make build"
 cpu_load_prepare "${CPUIDLE_DIR}"
-cpu_metrics_prepare "${CPUIDLE_DIR}"
+cpu_metrics_prepare
 
 CPUIDLE_PORT=$(allocate_available_port) || fatal "cannot allocate cpuidle API port"
 CPUIDLE_KUBELET_PORT=${KUBELET_PODS_API##*:}
@@ -112,7 +100,7 @@ HUATUO_BAMAI_METRICS_API="${HUATUO_BAMAI_ADDR}/metrics"
 
 cpuidle_status() {
 	local enabled=1
-	[[ ${CPUIDLE_DISABLED} != true ]] || enabled=0
+	[[ ${cpuidle_disabled} != true ]] || enabled=0
 	assert_cpu_tracing_status cpuidle "${enabled}"
 }
 
@@ -166,7 +154,7 @@ cpuidle_target() {
 		--arg cpuset "${cpuset}" --argjson quota "${quota}" \
 		'[{Name: $pod, Pod: $pod, UsagePath: $usage, CPUPath: $cpu, CpusetPath: $cpuset, QuotaMilli: $quota}]' \
 		> "${CPUIDLE_DIR}/${suffix}.target.json"
-	"${CPUIDLE_DIR}/cpu-util" capacity --targets "${CPUIDLE_DIR}/${suffix}.target.json" > "${CPUIDLE_DIR}/${suffix}.cores"
+	"${CPUIDLE_UTIL_BIN}" capacity --targets "${CPUIDLE_DIR}/${suffix}.target.json" > "${CPUIDLE_DIR}/${suffix}.cores"
 	printf '%s\n' "${usage}" > "${CPUIDLE_DIR}/${suffix}.usage"
 	log_info "cpuidle target: pod=${CPUIDLE_PREFIX}-${suffix} id=${id} capacity=$(< "${CPUIDLE_DIR}/${suffix}.cores") cgroup=${cpu}"
 }
@@ -187,7 +175,7 @@ cpuidle_ready_events() {
 	[[ $(cpuidle_event_count "$1") -ge $2 ]]
 }
 
-cpuidle_no_events() {
+assert_cpuidle_no_events() {
 	cpuidle_local_events > "${HUATUO_BAMAI_TEST_TMPDIR}/local.json"
 	[[ $(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") -eq 0 ]] \
 		|| fatal "${cpuidle_phase}: unexpected cpuidle event"
@@ -202,7 +190,7 @@ cpuidle_reference() {
 	read -r mode milli _ < "${CPUIDLE_DIR}/${suffix}.command"
 	expected=$(jq -n --argjson milli "${milli}" --argjson cores "$(< "${CPUIDLE_DIR}/${suffix}.cores")" '$milli / 10 / $cores')
 	jq -e --arg mode "${mode}" --argjson expected "${expected}" \
-		--argjson system_threshold "${CPUIDLE_THRESHOLDS[1]}" '
+		--argjson system_threshold "${cpuidle_thresholds[1]}" '
 		.percent | if $mode == "idle" then .total < 10 else
 			.total >= $expected - 15 and .total <= $expected + 15
 			and (if $mode == "user" then .user > 30
@@ -212,7 +200,7 @@ cpuidle_reference() {
 	log_info "cpuidle reference: phase=${cpuidle_phase} pod=${CPUIDLE_PREFIX}-${suffix} $(jq -c '.percent' "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl")"
 }
 
-cpuidle_log_check() {
+assert_cpuidle_logs() {
 	huatuo_bamai_log_check || fatal "cpuidle daemon logged an unexpected failure"
 	# Discovery races are retried; target metadata and flame graphs are verified.
 	awk '/level="?warn|"level":"warn"/ &&
@@ -236,7 +224,7 @@ cpuidle_finish() {
 		wait_until 15 1 cpuidle_compare_storage || fatal "cannot confirm completed cpuidle records before SIGKILL"
 	fi
 	huatuo_bamai_stop_with_signal "${signal}"
-	cpuidle_log_check
+	assert_cpuidle_logs
 	wait_until 15 1 cpuidle_compare_storage || fatal "cpuidle local/ES events differ"
 	log_info "cpuidle storage: phase=${cpuidle_phase} local=$(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") ES=$(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/remote.json")"
 }
@@ -263,21 +251,21 @@ cpuidle_begin() {
 	mkdir -p "${HUATUO_BAMAI_TEST_TMPDIR}"
 	cpuidle_command a idle 0
 	cpuidle_command b idle 0
-	log_info "cpuidle phase: ${cpuidle_phase} thresholds=${CPUIDLE_THRESHOLDS[*]} interval=${CPUIDLE_INTERVAL}s duration=${CPUIDLE_DURATION}s cooldown=${CPUIDLE_COOLDOWN}s"
+	log_info "cpuidle phase: ${cpuidle_phase} thresholds=${cpuidle_thresholds[*]} interval=${cpuidle_interval}s duration=${cpuidle_duration}s cooldown=${cpuidle_cooldown}s"
 	cpuidle_start
 	cpuidle_target a 500
 	cpuidle_target b 1000
 	cpuidle_reference a baseline 8
 }
 
-cpuidle_assert_events() {
+assert_cpuidle_events() {
 	local suffix=$1 channel=$2 forbid=b kernel=false
 	[[ ${suffix} != b ]] || forbid=a
 	[[ ${channel} != system ]] || kernel=true
 	cpuidle_local_events | jq --arg id "$(< "${CPUIDLE_DIR}/${suffix}.id")" '[.[] | select(.container_id == $id)]' \
 		> "${HUATUO_BAMAI_TEST_TMPDIR}/${suffix}.events.json"
 	jq -e --arg pod "${CPUIDLE_PREFIX}-${suffix}" --arg ns "${CPUIDLE_NS}" --arg host "$(hostname)" \
-		--arg channel "${channel}" --argjson thresholds "$(printf '%s\n' "${CPUIDLE_THRESHOLDS[@]}" | jq -s '.')" '
+		--arg channel "${channel}" --argjson thresholds "$(printf '%s\n' "${cpuidle_thresholds[@]}" | jq -s '.')" '
 		def integer: type == "number" and floor == .;
 		def timestamp: type == "string" and test("^[0-9]{4}-.*Z$");
 		length > 0 and all(.[];
@@ -322,12 +310,12 @@ cpuidle_capture() {
 	cpuidle_reference "${suffix}" "${suffix}-high" 4
 	wait_until 35 0.5 cpuidle_ready_events "${suffix}" "$((before + 1))" \
 		|| fatal "${cpuidle_phase}: ${channel} spike produced no target event"
-	cpuidle_assert_events "${suffix}" "${channel}"
+	assert_cpuidle_events "${suffix}" "${channel}"
 	cpuidle_status
 }
 
 cpuidle_cooldown_elapsed() {
-	cpuidle_local_events | jq -e --arg id "$(< "${CPUIDLE_DIR}/a.id")" --argjson cooldown "${CPUIDLE_COOLDOWN}" '
+	cpuidle_local_events | jq -e --arg id "$(< "${CPUIDLE_DIR}/a.id")" --argjson cooldown "${cpuidle_cooldown}" '
 		[.[] | select(.container_id == $id) | .started_timestamp |
 		 sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601] | max as $started |
 		$started != null and now >= $started + $cooldown + 1
@@ -339,12 +327,12 @@ cpuidle_invalid_config() (
 	HUATUO_BAMAI_TEST_TMPDIR="${CPUIDLE_DIR}/invalid-${name}"
 	mkdir -p "${HUATUO_BAMAI_TEST_TMPDIR}"
 	case ${name} in
-	interval) CPUIDLE_INTERVAL=0 ;;
-	cooldown) CPUIDLE_COOLDOWN=0 ;;
-	duration) CPUIDLE_DURATION=0 ;;
-	negative) CPUIDLE_THRESHOLDS[0]=-1 ;;
-	percentage) CPUIDLE_THRESHOLDS[5]=101 ;;
-	regex) CPUIDLE_INCLUDE='[' ;;
+	interval) cpuidle_interval=0 ;;
+	cooldown) cpuidle_cooldown=0 ;;
+	duration) cpuidle_duration=0 ;;
+	negative) cpuidle_thresholds[0]=-1 ;;
+	percentage) cpuidle_thresholds[5]=101 ;;
+	regex) cpuidle_include='[' ;;
 	esac
 	write_cpuidle_autotracing_config
 	timeout 15 "${HUATUO_BAMAI_BIN}" --region e2e --disable-kubelet --config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" \
@@ -372,8 +360,8 @@ cpuidle_create_pod a 500m
 cpuidle_create_pod b 1000m
 
 # Leave margin for user-time accounting differences and split sampling windows.
-CPUIDLE_THRESHOLDS=(30 100 100 7 100 100)
-CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-a$"
+cpuidle_thresholds=(30 100 100 7 100 100)
+cpuidle_include="^${CPUIDLE_PREFIX}-a$"
 cpuidle_begin user
 cpuidle_command b user 600
 cpuidle_capture a user 300 user
@@ -381,28 +369,28 @@ cpuidle_capture a user 300 user
 cpuidle_finish
 
 # getpid splits time between user and kernel; leave room for a split sampling step.
-CPUIDLE_THRESHOLDS=(100 10 100 100 3 100)
-CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-b$"
+cpuidle_thresholds=(100 10 100 100 3 100)
+cpuidle_include="^${CPUIDLE_PREFIX}-b$"
 cpuidle_begin system
 cpuidle_capture b system 600 system
 cpuidle_finish
 
 # Leave margin when the 60% step spans two sampling windows and is truncated.
-CPUIDLE_THRESHOLDS=(100 100 40 100 100 10)
+cpuidle_thresholds=(100 100 40 100 100 10)
 cpuidle_begin total
 cpuidle_capture b mixed 600 total
 cpuidle_finish
 
-CPUIDLE_THRESHOLDS=(100 100 90 100 100 10)
-CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-a$"
+cpuidle_thresholds=(100 100 90 100 100 10)
+cpuidle_include="^${CPUIDLE_PREFIX}-a$"
 cpuidle_begin below-threshold
 cpuidle_command a user 300
 cpuidle_reference a high 8
-cpuidle_no_events
+assert_cpuidle_no_events
 cpuidle_finish
 
 # Starting at high utilization must establish a baseline, not invent a spike.
-CPUIDLE_THRESHOLDS=(100 100 20 100 100 20)
+cpuidle_thresholds=(100 100 20 100 100 20)
 cpuidle_phase=steady-high
 HUATUO_BAMAI_TEST_TMPDIR="${CPUIDLE_DIR}/${cpuidle_phase}"
 mkdir -p "${HUATUO_BAMAI_TEST_TMPDIR}"
@@ -412,11 +400,11 @@ cpuidle_reference a steady-ready-2 2
 cpuidle_start
 cpuidle_target a 500
 cpuidle_reference a steady 8
-cpuidle_no_events
+assert_cpuidle_no_events
 cpuidle_finish
 
-CPUIDLE_THRESHOLDS=(100 100 20 100 100 15)
-CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-(a|b)$"
+cpuidle_thresholds=(100 100 20 100 100 15)
+cpuidle_include="^${CPUIDLE_PREFIX}-(a|b)$"
 cpuidle_begin cooldown
 cpuidle_capture a user 300 total
 cpuidle_command a idle 0
@@ -427,47 +415,47 @@ cpuidle_reference a cooldown-high 4
 cpuidle_capture b user 600 total
 cpuidle_command a idle 0
 cpuidle_reference a recovery-idle 8
-wait_until "$((CPUIDLE_COOLDOWN + CPUIDLE_INTERVAL))" 0.5 cpuidle_cooldown_elapsed \
+wait_until "$((cpuidle_cooldown + cpuidle_interval))" 0.5 cpuidle_cooldown_elapsed \
 	|| fatal "first cpuidle event did not reach its cooldown deadline"
 cpuidle_capture a user 300 total
-cpuidle_local_events | jq -e --arg id "$(< "${CPUIDLE_DIR}/a.id")" --argjson cooldown "${CPUIDLE_COOLDOWN}" '
+cpuidle_local_events | jq -e --arg id "$(< "${CPUIDLE_DIR}/a.id")" --argjson cooldown "${cpuidle_cooldown}" '
 	[.[] | select(.container_id == $id) | .started_timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601] | sort |
 	length == 2 and .[1] - .[0] >= $cooldown
 ' > /dev/null || fatal "cpuidle event timestamps violate per-container cooldown"
 cpuidle_finish
 
-CPUIDLE_INCLUDE_FIELD=container_host_namespace
-CPUIDLE_INCLUDE="^${CPUIDLE_NS}$"
-CPUIDLE_EXCLUDE="^${CPUIDLE_PREFIX}-a$"
+cpuidle_include_field=container_host_namespace
+cpuidle_include="^${CPUIDLE_NS}$"
+cpuidle_exclude="^${CPUIDLE_PREFIX}-a$"
 cpuidle_begin exclude-priority
 cpuidle_command a user 300
 cpuidle_reference a excluded 4
-cpuidle_no_events
+assert_cpuidle_no_events
 cpuidle_capture b user 600 total
 [[ $(cpuidle_event_count a) -eq 0 ]] || fatal "excluded Pod overrode exclusion with an include match"
 cpuidle_finish
 
-CPUIDLE_EXCLUDE_FIELD=container_qos
-CPUIDLE_EXCLUDE='^burstable$'
+cpuidle_exclude_field=container_qos
+cpuidle_exclude='^burstable$'
 cpuidle_begin excluded-qos
 cpuidle_command a user 300
 cpuidle_reference a excluded 8
-cpuidle_no_events
+assert_cpuidle_no_events
 cpuidle_finish
 
-CPUIDLE_EXCLUDE_FIELD=container_hostname
-CPUIDLE_EXCLUDE='^$'
-CPUIDLE_DISABLED=true
+cpuidle_exclude_field=container_hostname
+cpuidle_exclude='^$'
+cpuidle_disabled=true
 cpuidle_begin disabled
 cpuidle_command a user 300
 cpuidle_reference a disabled 8
-cpuidle_no_events
+assert_cpuidle_no_events
 cpuidle_finish
-CPUIDLE_DISABLED=false
+cpuidle_disabled=false
 
 # Normal restart and SIGKILL recovery both require a new low-utilization baseline.
-CPUIDLE_INCLUDE_FIELD=container_hostname
-CPUIDLE_INCLUDE="^${CPUIDLE_PREFIX}-a$"
+cpuidle_include_field=container_hostname
+cpuidle_include="^${CPUIDLE_PREFIX}-a$"
 cpuidle_begin restart
 cpuidle_capture a user 300 total
 query_pids=()

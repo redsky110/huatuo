@@ -90,7 +90,11 @@ func readUsage(path string, ticks float64) (usage, error) {
 		}
 	}
 	if !v1 {
-		return usage{User: values["user_usec"] / 1e6, System: values["system_usec"] / 1e6, Total: values["usage_usec"] / 1e6}, nil
+		return usage{
+			User:   values["user_usec"] / 1e6,
+			System: values["system_usec"] / 1e6,
+			Total:  values["usage_usec"] / 1e6,
+		}, nil
 	}
 	data, err = os.ReadFile(filepath.Join(path, "cpuacct.usage"))
 	if err != nil {
@@ -100,7 +104,11 @@ func readUsage(path string, ticks float64) (usage, error) {
 	if err != nil {
 		return usage{}, err
 	}
-	return usage{User: values["user"] / ticks, System: values["system"] / ticks, Total: total / 1e9}, nil
+	return usage{
+		User:   values["user"] / ticks,
+		System: values["system"] / ticks,
+		Total:  total / 1e9,
+	}, nil
 }
 
 func sampleUsage(path string, cores, ticks float64, duration time.Duration, writer io.Writer) error {

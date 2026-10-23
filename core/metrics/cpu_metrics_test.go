@@ -15,12 +15,16 @@
 package collector
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/ccfos/huatuo/internal/cgroups"
 	"github.com/ccfos/huatuo/internal/cgroups/stats"
+
+	"github.com/stretchr/testify/require"
 )
 
 type cpuUsageCgroup struct {
@@ -182,4 +186,36 @@ func BenchmarkCPUUtilCollectorUpdateDataCache(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestRunqlatAggregatePerCPUValue(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		values []uint64
+		want   latencyBpfData
+	}{
+		{name: "empty"},
+		{
+			name:   "one CPU",
+			values: []uint64{1, 2, 3, 4, 5, 6},
+			want:   latencyBpfData{1, 2, 3, 4, 5, 6},
+		},
+		{
+			name:   "two CPUs",
+			values: []uint64{1, 2, 3, 4, 5, 6, 10, 20, 30, 40, 50, 60},
+			want:   latencyBpfData{11, 22, 33, 44, 55, 66},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var raw bytes.Buffer
+			require.NoError(t, binary.Write(&raw, binary.LittleEndian, test.values))
+			got := latencyBpfData{99, 99, 99, 99, 99, 99}
+			require.NoError(t, aggregatePerCPUValue(raw.Bytes(), &got))
+			require.Equal(t, test.want, got)
+		})
+	}
+	t.Run("partial record", func(t *testing.T) {
+		var got latencyBpfData
+		require.Error(t, aggregatePerCPUValue(make([]byte, binary.Size(got)-1), &got))
+	})
 }

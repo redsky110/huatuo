@@ -27,19 +27,19 @@ source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
 
 readonly CURL_TIMEOUT=(--connect-timeout 2 --max-time 5)
 readonly DLOAD_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/dload"
-readonly DLOAD_BIN="${DLOAD_DIR}/reference"
+readonly DLOAD_BIN=${DLOAD_HELPER_BIN:-${ROOT_DIR}/_output/tests/dload-reference}
 readonly DLOAD_NS="${BUSINESS_POD_NS}"
 readonly DLOAD_PREFIX="dload-${BASHPID}-${RANDOM}"
 readonly DLOAD_LABEL="app=${DLOAD_PREFIX}"
 readonly DLOAD_INDEX="huatuo_e2e_${DLOAD_PREFIX}"
 readonly DLOAD_DM="huatuo-${DLOAD_PREFIX}"
 readonly DLOAD_SECTORS=65536
-DLOAD_INTERVAL=1
-DLOAD_THRESHOLD=1
-DLOAD_COOLDOWN=2
-DLOAD_DEBUG=false
-DLOAD_DISABLED=false
-DLOAD_ISSUES='[]'
+dload_interval=1
+dload_threshold=1
+dload_cooldown=2
+dload_debug=false
+dload_disabled=false
+dload_issues='[]'
 dload_loop=""
 dload_device_dir=""
 dload_mapper_created=false
@@ -130,14 +130,8 @@ dload_cleanup() {
 }
 trap dload_cleanup EXIT
 
-if [[ -n ${DLOAD_HELPER_BIN:-} ]]; then
-	require_commands "${DLOAD_HELPER_BIN}"
-	cp "${DLOAD_HELPER_BIN}" "${DLOAD_BIN}"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${DLOAD_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_dload.go"
-fi
-cpu_metrics_prepare "${DLOAD_DIR}"
+[[ -x ${DLOAD_BIN} ]] || fatal "test helper is not executable: ${DLOAD_BIN}; run make build"
+cpu_metrics_prepare
 if [[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]]; then
 	DLOAD_MODE=unified
 elif [[ $(stat -fc %T /sys/fs/cgroup/unified 2> /dev/null || true) == cgroup2fs ]]; then
@@ -162,7 +156,7 @@ HUATUO_BAMAI_METRICS_API="${HUATUO_BAMAI_ADDR}/metrics"
 
 dload_status() {
 	local enabled=1
-	[[ ${DLOAD_DISABLED} != true ]] || enabled=0
+	[[ ${dload_disabled} != true ]] || enabled=0
 	assert_cpu_tracing_status dload "${enabled}"
 }
 
@@ -179,7 +173,7 @@ dload_concurrent_status() {
 	huatuo_bamai_metrics > "${dload_work}/metrics.prom"
 }
 
-dload_log_check() {
+assert_dload_logs() {
 	[[ -r ${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log ]] \
 		|| fatal "dload daemon log is not readable: ${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log"
 	HUATUO_BAMAI_MATCH_KEYWORDS="${HUATUO_BAMAI_MATCH_KEYWORDS}|\"level\":\"(error|panic|fatal)\"" \
@@ -200,7 +194,7 @@ dload_start() {
 
 dload_stop() {
 	huatuo_bamai_stop_with_signal TERM
-	dload_log_check
+	assert_dload_logs
 }
 
 # Constructor validation must fail before any Pod or IO workload is created.
@@ -209,9 +203,9 @@ dload_invalid_config() (
 	HUATUO_BAMAI_TEST_TMPDIR="${DLOAD_DIR}/invalid-${name}"
 	mkdir -p "${HUATUO_BAMAI_TEST_TMPDIR}"
 	case ${name} in
-	interval) DLOAD_INTERVAL=-1 ;;
-	threshold) DLOAD_THRESHOLD=-1 ;;
-	cooldown) DLOAD_COOLDOWN=-1 ;;
+	interval) dload_interval=-1 ;;
+	threshold) dload_threshold=-1 ;;
+	cooldown) dload_cooldown=-1 ;;
 	esac
 	write_dload_autotracing_config
 	timeout 15 "${HUATUO_BAMAI_BIN}" --region e2e --disable-kubelet \
@@ -241,7 +235,7 @@ if [[ ${DLOAD_MODE} != legacy ]]; then
 	mkdir -p "${HUATUO_BAMAI_TEST_TMPDIR}"
 	dload_start
 	wait_until 10 0.5 dload_unsupported_logged || fatal "${DLOAD_MODE}: missing unsupported-mode log"
-	cpu_metrics_observe "$((DLOAD_INTERVAL * 2))" 0.5 assert_dload_unsupported \
+	cpu_metrics_observe "$((dload_interval * 2))" 0.5 assert_dload_unsupported \
 		|| fatal "${DLOAD_MODE}: unsupported mode saved events or changed lifecycle status"
 	dload_stop
 	skip "dload unsupported-mode behavior verified; functional/ES cases require Legacy cgroup (actual=${DLOAD_MODE})"
@@ -340,7 +334,7 @@ dload_snapshot() {
 
 dload_local_events() {
 	if [[ -s ${HUATUO_BAMAI_TEST_TMPDIR}/events/dload ]]; then
-		jq -s --arg id "${dload_id}" --argjson debug "${DLOAD_DEBUG}" \
+		jq -s --arg id "${dload_id}" --argjson debug "${dload_debug}" \
 			'[.[] | select($debug or .container_id == $id)]' \
 			"${HUATUO_BAMAI_TEST_TMPDIR}/events/dload"
 	else
@@ -355,7 +349,7 @@ dload_local_ready() {
 
 dload_debug_ready() {
 	dload_local_events > "${dload_work}/local.json" || return 1
-	jq -e --argjson cooldown "${DLOAD_COOLDOWN}" '
+	jq -e --argjson cooldown "${dload_cooldown}" '
 		def event_time:
 			capture("^(?<seconds>[^.]+)(?<fraction>\\.[0-9]+)?Z$") |
 			(.seconds + "Z" | fromdateiso8601) + ((.fraction // "0") | tonumber);
@@ -369,7 +363,7 @@ dload_debug_ready() {
 
 dload_remote_events() {
 	local query
-	if [[ ${DLOAD_DEBUG} == true ]]; then
+	if [[ ${dload_debug} == true ]]; then
 		# Other phases share the index; only this instance's local IDs belong here.
 		query=$(dload_local_events | jq '
 			{size: 1000, query: {bool: {filter: [{term: {"tracer_name.keyword": "dload"}}, {ids: {values: map(.tracer_id)}}]}}}')
@@ -426,11 +420,11 @@ dload_compare_storage() {
 	log_info "dload storage: phase=${phase} pods=$(jq -c 'map(.container_hostname) | unique' "${dload_work}/local.json") local=$(jq length "${dload_work}/local.json") ES=$(jq length "${dload_work}/remote.json")"
 }
 
-dload_assert_events() {
+assert_dload_events() {
 	local issue=$1
 	jq -e --arg id "${dload_id}" --arg pod "${dload_pod}" --arg ns "${DLOAD_NS}" \
-		--arg host "$(hostname)" --arg issue "${issue}" --argjson threshold "${DLOAD_THRESHOLD}" \
-		--argjson debug "${DLOAD_DEBUG}" '
+		--arg host "$(hostname)" --arg issue "${issue}" --argjson threshold "${dload_threshold}" \
+		--argjson debug "${dload_debug}" '
 		def count: type == "number" and . >= 0 and floor == .;
 		def text: type == "string" and length > 0;
 		def timestamp: type == "string" and test("^[0-9]{4}-.*Z$");
@@ -455,7 +449,7 @@ dload_assert_events() {
 				and (.stack | if $debug then type == "string"
 					else contains("stacktrace of D task in cgroup:") and contains("Comm: stress-ng-hdd") end)))
 	' "${dload_work}/local.json" > /dev/null || fatal "invalid dload event metadata or data; inspect local.json"
-	if [[ ${DLOAD_DEBUG} != true ]]; then
+	if [[ ${dload_debug} != true ]]; then
 		jq -e --slurpfile blocked "${dload_work}/blocked.json" '
 			any(.[]; .tracer_data.stack | split("stacktrace of D task in host:") |
 				length == 2 and (.[1] as $host |
@@ -501,7 +495,7 @@ dload_case_cleanup() {
 		--ignore-not-found --timeout=30s || status=1
 	huatuo_bamai_stop || status=1
 	if [[ ${status} -eq 0 ]]; then
-		dload_log_check
+		assert_dload_logs
 	else
 		kubectl --request-timeout=10s describe pod -n "${DLOAD_NS}" -l "${DLOAD_LABEL}" \
 			> "${HUATUO_BAMAI_TEST_TMPDIR}/pods-failure.txt" 2>&1 || true
@@ -532,22 +526,22 @@ dload_run_case() (
 	mkdir -p "${HUATUO_BAMAI_TEST_TMPDIR}"
 	dload_reference_pid=""
 	trap dload_case_cleanup EXIT
-	DLOAD_THRESHOLD=1 DLOAD_COOLDOWN=2 DLOAD_DEBUG=false DLOAD_DISABLED=false DLOAD_ISSUES='[]'
+	dload_threshold=1 dload_cooldown=2 dload_debug=false dload_disabled=false dload_issues='[]'
 	case ${name} in
-	high-threshold) DLOAD_THRESHOLD=8 ;;
-	cooldown | restart | kill-recovery) DLOAD_COOLDOWN=60 ;;
+	high-threshold) dload_threshold=8 ;;
+	cooldown | restart | kill-recovery) dload_cooldown=60 ;;
 	debug)
-		DLOAD_THRESHOLD=8 DLOAD_COOLDOWN=60 DLOAD_DEBUG=true
-		DLOAD_ISSUES=${DLOAD_FIXTURE_ISSUES}
+		dload_threshold=8 dload_cooldown=60 dload_debug=true
+		dload_issues=${DLOAD_FIXTURE_ISSUES}
 		;;
 	classified)
-		DLOAD_THRESHOLD=0 DLOAD_COOLDOWN=0
-		DLOAD_ISSUES=${DLOAD_FIXTURE_ISSUES}
+		dload_threshold=0 dload_cooldown=0
+		dload_issues=${DLOAD_FIXTURE_ISSUES}
 		issue=e2e-dload
 		;;
-	disabled) DLOAD_DISABLED=true ;;
+	disabled) dload_disabled=true ;;
 	esac
-	log_info "dload phase=${name} threshold=${DLOAD_THRESHOLD} cooldown=${DLOAD_COOLDOWN} debug=${DLOAD_DEBUG}"
+	log_info "dload phase=${name} threshold=${dload_threshold} cooldown=${dload_cooldown} debug=${dload_debug}"
 	dload_start
 	dload_create_pod "${name}"
 	dload_snapshot "${dload_work}/baseline.json"
@@ -565,11 +559,11 @@ dload_run_case() (
 		dload_status
 		dload_stop
 		dload_compare_storage "${name}"
-		dload_assert_events none
+		assert_dload_events none
 		dload_debug_ready || fatal "saved debug events did not bypass threshold/cooldown; inspect ${dload_work}/debug-check.err"
 		return
 	fi
-	cpu_metrics_observe "$((DLOAD_INTERVAL * 2))" 0.5 assert_dload_idle \
+	cpu_metrics_observe "$((dload_interval * 2))" 0.5 assert_dload_idle \
 		|| fatal "idle container has D tasks, unexpected events or invalid lifecycle status"
 	timeout 25 "${DLOAD_BIN}" sample --cgroup "${dload_cgroup}" --duration 18s \
 		> "${dload_work}/samples.jsonl" 2> "${dload_work}/reference.err" &
@@ -594,7 +588,7 @@ dload_run_case() (
 				[[ $? -eq 137 ]] || fatal "bamai did not exit from SIGKILL"
 			fi
 			huatuo_bamai_stop
-			dload_log_check
+			assert_dload_logs
 		else
 			dload_stop
 		fi
@@ -618,7 +612,7 @@ dload_run_case() (
 		assert_huatuo_bamai_containers_absent 'deleted dload container' "${old_id}"
 		dload_delay 0
 		dload_compare_storage "${name}"
-		dload_assert_events none
+		assert_dload_events none
 		dload_create_pod replacement
 		[[ ${dload_id} != "${old_id}" ]] || fatal "replacement Pod reused the old container ID"
 		dload_delay 1000
@@ -647,9 +641,9 @@ dload_run_case() (
 		;;
 	cooldown)
 		jq -e 'length == 1' "${dload_work}/local.json" > /dev/null || fatal "cooldown did not restrict tracing to one event"
-		dload_assert_events "${issue}"
+		assert_dload_events "${issue}"
 		;;
-	*) dload_assert_events "${issue}" ;;
+	*) assert_dload_events "${issue}" ;;
 	esac
 )
 

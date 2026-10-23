@@ -25,14 +25,14 @@ source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
 require_commands kubectl jq findmnt ss sysctl taskset getconf
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}" /proc/sys/kernel/sched_schedstats
 readonly CPU_STAT_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-stat"
-readonly CPU_STAT_BIN="${CPU_STAT_DIR}/cpu-stat"
+readonly CPU_STAT_BIN=${CPU_STAT_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-stat}
 readonly CPU_STAT_LOAD="${CPU_STAT_DIR}/cpu-load"
 readonly CPU_STAT_NS="${BUSINESS_POD_NS}"
 readonly CPU_STAT_PREFIX="cpu-stat-${BASHPID}-${RANDOM}"
 readonly CPU_STAT_LABEL="app=${CPU_STAT_PREFIX}"
 readonly CPU_STAT_SCHEDSTATS=$(sysctl -n kernel.sched_schedstats)
 readonly CPU_STAT_TICKS=$(getconf CLK_TCK)
-CPU_STAT_DISABLED=false
+cpu_stat_disabled=false
 cpu_stat_wait=false
 cpu_stat_host_pid=""
 cpu_stat_host_cgroup=""
@@ -63,14 +63,7 @@ cpu_stat_cleanup() {
 }
 trap cpu_stat_cleanup EXIT
 
-if [[ -n ${CPU_STAT_HELPER_BIN:-} ]]; then
-	require_commands "${CPU_STAT_HELPER_BIN}"
-	cp "${CPU_STAT_HELPER_BIN}" "${CPU_STAT_BIN}"
-else
-	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPU_STAT_BIN}" "${ROOT_DIR}/e2e/testdata/test_cpu_stat.go" \
-		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/proc_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
-fi
+[[ -x ${CPU_STAT_BIN} ]] || fatal "test helper is not executable: ${CPU_STAT_BIN}; run make build"
 cpu_load_prepare "${CPU_STAT_DIR}"
 
 CPU_STAT_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
@@ -379,10 +372,10 @@ cpu_stat_create "${a}" 2
 cpu_stat_command "${a}" user 1000
 cpu_stat_single_phase pod-recreated 100 0
 
-CPU_STAT_DISABLED=true
+cpu_stat_disabled=true
 cpu_stat_restart_daemon
 "${CPU_STAT_BIN}" disabled --url "${HUATUO_BAMAI_METRICS_API}"
-CPU_STAT_DISABLED=false
+cpu_stat_disabled=false
 cpu_stat_restart_daemon
 cpu_stat_single_phase blacklist-reenabled 100 0
 
