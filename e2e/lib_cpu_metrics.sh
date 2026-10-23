@@ -45,3 +45,41 @@ assert_cpu_tracing_status() {
   and (if $enabled == 1 then $hits.type == "GAUGE" else true end)
  ' "${file}" > /dev/null
 }
+
+# Keep metric structure checks shared while each case owns its numeric expectations.
+CPU_METRICS_JQ='
+def container_labels($t; $host):
+ {host: $host, region: "e2e", container_host: $t.Pod, container_name: $t.Container,
+  container_hostnamespace: $t.Namespace, container_type: ($t.Type // "normal"),
+  container_level: ($t.QoS // "burstable")};
+def cpu_metric($f; $labels):
+ [$f.samples[]? | select(.labels | contains($labels))] as $rows |
+ if $f.type == "GAUGE" and ($f.help | type == "string" and length > 0)
+  and ($rows | length) == 1 and $rows[0].labels == $labels
+  and ($rows[0].value | type == "number" and . >= 0)
+ then $rows[0].value else error("invalid Gauge sample for " + ($labels | tostring)) end;
+def collector_ok($families; $collector):
+ $families.huatuo_bamai_scrape_collector_success as $f |
+ [$f.samples[]? | select(.labels.collector == $collector)] as $rows |
+ $f.type == "GAUGE" and ($rows | length) == 1 and $rows[0].value == 1;
+'
+
+assert_cpu_metrics_absent() {
+	local collector=$1 targets=$2 file="${HUATUO_BAMAI_TEST_TMPDIR}/absent-${BASHPID}.json"
+	cpu_metrics_read "${file}" || return 1
+	jq -e --arg prefix "huatuo_bamai_${collector}_" --slurpfile targets "${targets}" '
+  [. | to_entries[] | select(.key | startswith($prefix)) | .value.samples[]? |
+   .labels as $labels | select(any($targets[0][];
+    .Pod == $labels.container_host and .Container == $labels.container_name
+    and .Namespace == $labels.container_hostnamespace))] | length == 0
+ ' "${file}" > /dev/null
+}
+
+assert_cpu_collector_disabled() {
+	local collector=$1 file="${HUATUO_BAMAI_TEST_TMPDIR}/disabled-${BASHPID}.json"
+	cpu_metrics_read "${file}" || return 1
+	jq -e --arg collector "${collector}" --arg prefix "huatuo_bamai_${collector}_" '
+  (keys | all(.[]; startswith($prefix) | not))
+  and ([.huatuo_bamai_scrape_collector_success.samples[]? | select(.labels.collector == $collector)] | length == 0)
+ ' "${file}" > /dev/null
+}

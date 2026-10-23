@@ -63,3 +63,19 @@ func runConcurrent(workers, rounds int, interval time.Duration, check func() err
 	close(errs)
 	return <-errs
 }
+
+func collectConcurrent[T any](workers, rounds int, interval time.Duration, collect func() (T, error)) ([]T, error) {
+	var mu sync.Mutex
+	samples := make([]T, 0, workers*rounds)
+	err := runConcurrent(workers, rounds, interval, func() error {
+		sample, err := collect()
+		if err != nil {
+			return err
+		}
+		mu.Lock()
+		samples = append(samples, sample)
+		mu.Unlock()
+		return nil
+	})
+	return samples, err
+}
