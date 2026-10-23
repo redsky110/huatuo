@@ -118,7 +118,7 @@ if [[ -n ${DLOAD_HELPER_BIN:-} ]]; then
 	cp "${DLOAD_HELPER_BIN}" "${DLOAD_BIN}"
 else
 	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${DLOAD_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_dload.go"
+	CGO_ENABLED=0 go build -mod=vendor -o "${DLOAD_BIN}" "${ROOT_DIR}/integration/testdata/test_autotracing_dload.go"
 fi
 cpu_metrics_prepare "${DLOAD_DIR}"
 if [[ $(stat -fc %T /sys/fs/cgroup) == cgroup2fs ]]; then

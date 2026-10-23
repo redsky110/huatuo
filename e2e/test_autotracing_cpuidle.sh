@@ -74,15 +74,15 @@ if [[ -n ${CPUIDLE_HELPER_BIN:-} ]]; then
 	cp "${CPUIDLE_HELPER_BIN}" "${CPUIDLE_BIN}"
 else
 	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_BIN}" "${ROOT_DIR}/e2e/testdata/test_autotracing_cpuidle.go"
+	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_BIN}" "${ROOT_DIR}/integration/testdata/test_autotracing_cpuidle.go"
 fi
 if [[ -n ${CPU_UTIL_HELPER_BIN:-} ]]; then
 	require_commands "${CPU_UTIL_HELPER_BIN}"
 	cp "${CPU_UTIL_HELPER_BIN}" "${CPUIDLE_DIR}/cpu-util"
 else
 	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_DIR}/cpu-util" "${ROOT_DIR}/e2e/testdata/test_cpu_util.go" \
-		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/proc_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
+	CGO_ENABLED=0 go build -mod=vendor -o "${CPUIDLE_DIR}/cpu-util" "${ROOT_DIR}/integration/testdata/test_cpu_util.go" \
+		"${ROOT_DIR}/integration/testdata/metrics_helpers.go" "${ROOT_DIR}/integration/testdata/proc_helpers.go" "${ROOT_DIR}/integration/testdata/fixture_helpers.go"
 fi
 cpu_load_prepare "${CPUIDLE_DIR}"
 cpu_metrics_prepare "${CPUIDLE_DIR}"

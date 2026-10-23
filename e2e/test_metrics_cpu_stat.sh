@@ -68,8 +68,8 @@ if [[ -n ${CPU_STAT_HELPER_BIN:-} ]]; then
 	cp "${CPU_STAT_HELPER_BIN}" "${CPU_STAT_BIN}"
 else
 	require_commands go
-	CGO_ENABLED=0 go build -mod=vendor -o "${CPU_STAT_BIN}" "${ROOT_DIR}/e2e/testdata/test_cpu_stat.go" \
-		"${ROOT_DIR}/e2e/testdata/metrics_helpers.go" "${ROOT_DIR}/e2e/testdata/proc_helpers.go" "${ROOT_DIR}/e2e/testdata/fixture_helpers.go"
+	CGO_ENABLED=0 go build -mod=vendor -o "${CPU_STAT_BIN}" "${ROOT_DIR}/integration/testdata/test_cpu_stat.go" \
+		"${ROOT_DIR}/integration/testdata/metrics_helpers.go" "${ROOT_DIR}/integration/testdata/proc_helpers.go" "${ROOT_DIR}/integration/testdata/fixture_helpers.go"
 fi
 cpu_load_prepare "${CPU_STAT_DIR}"
 
