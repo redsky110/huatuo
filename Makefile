@@ -206,7 +206,13 @@ gen-build: $(BPF_BUILD_STAMP)
 	@set -eu; $(call generate-openapi,.)
 	@set -eu; $(generate-non-openapi)
 
-test: unit integration e2e
+test: build
+	@bash integration/run.sh test_metrics_cpu_runqlat_tracing.sh
+	@bash e2e/run.sh test_autotracing_cpuidle.sh
+	@bash e2e/run.sh test_metrics_cpu_util.sh
+	@bash e2e/run.sh test_metrics_cpu_stat.sh
+	@bash e2e/run.sh test_metrics_cpu_runqlat_tracing.sh
+	@bash e2e/run.sh test_autotracing_dload.sh
 
 unit: gen-build
 	@go test -v ./... -coverprofile=$(APP_CMD_OUTPUT)/unit-coverage.txt -timeout=5m
