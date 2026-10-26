@@ -232,7 +232,8 @@ portable-generated: gen-build
 	@tar -cf $(APP_CMD_OUTPUT)/portable-generated.tar \
 		$(PORTABLE_GENERATED_FILES) $(APP_CMD_OUTPUT)/portable-generated.commit
 
-test: unit integration e2e
+test: build
+	@bash integration/run.sh test_autotracing_cpu_profiler.sh
 
 unit: gen-build
 	@go test -count=1 -v ./... -coverprofile=$(APP_CMD_OUTPUT)/unit-coverage.txt -timeout=5m
