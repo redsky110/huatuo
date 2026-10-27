@@ -189,7 +189,8 @@ assert_dload_logs() {
 }
 
 dload_start() {
-	integration_huatuo_bamai_start write_dload_autotracing_config --region e2e
+	write_config_dload_autotracing > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf"
+	huatuo_bamai_start --config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" --config bamai.conf --region e2e
 	wait_until 10 0.5 dload_status || fatal "dload lifecycle metrics are incorrect"
 }
 
@@ -208,7 +209,7 @@ assert_dload_invalid_config() (
 	threshold) dload_threshold=-1 ;;
 	cooldown) dload_cooldown=-1 ;;
 	esac
-	write_dload_autotracing_config
+	write_config_dload_autotracing > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf"
 	timeout 15 "${HUATUO_BAMAI_BIN}" --region e2e --disable-kubelet \
 		--config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" --config bamai.conf \
 		> "${HUATUO_BAMAI_TEST_TMPDIR}/expected-error.log" 2>&1 || status=$?

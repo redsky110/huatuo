@@ -509,10 +509,10 @@ BlackList = ["dropwatch", "arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle"
 EOF
 }
 
-write_cpu_util_config() {
+write_config_cpu_util() {
 	local cpu_blacklist=""
 	[[ ${cpu_util_disabled} != true ]] || cpu_blacklist='"cpu_util", '
-	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
+	cat << EOF
 BlackList = [${cpu_blacklist}"arp", "ascend_npu", "cpu_stat", "cpuidle", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "irqtracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "memory_threshold_snapshot", "metax_gpu", "mountpoint_perm", "mthreads_gpu", "mthreads_xid", "net_conntrack", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "memory_oom_kill", "ras", "runqlat", "sched_tick", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit", "tracing_status", "xfs", "iocost", "blk_throtl", "io_health", "sched-blame"]
 
 [HTTPServer]
@@ -527,10 +527,10 @@ BlackList = [${cpu_blacklist}"arp", "ascend_npu", "cpu_stat", "cpuidle", "cpusys
 EOF
 }
 
-write_cpu_stat_config() {
+write_config_cpu_stat() {
 	local cpu_blacklist=""
 	[[ ${cpu_stat_disabled} != true ]] || cpu_blacklist='"cpu_stat", '
-	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
+	cat << EOF
 BlackList = [${cpu_blacklist}"arp", "ascend_npu", "cpu_util", "cpuidle", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "irqtracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "memory_threshold_snapshot", "metax_gpu", "mountpoint_perm", "mthreads_gpu", "mthreads_xid", "net_conntrack", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "memory_oom_kill", "ras", "runqlat", "sched_tick", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit", "tracing_status", "xfs", "iocost", "blk_throtl", "io_health", "sched-blame"]
 
 [HTTPServer]
@@ -545,10 +545,10 @@ BlackList = [${cpu_blacklist}"arp", "ascend_npu", "cpu_util", "cpuidle", "cpusys
 EOF
 }
 
-write_runqlat_config() {
+write_config_runqlat() {
 	local runqlat_blacklist=""
 	[[ ${runqlat_disabled} != true ]] || runqlat_blacklist='"runqlat", '
-	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
+	cat << EOF
 BlackList = [${runqlat_blacklist}"arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "irqtracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "memory_threshold_snapshot", "metax_gpu", "mountpoint_perm", "mthreads_gpu", "mthreads_xid", "net_conntrack", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "memory_oom_kill", "ras", "sched_tick", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit", "xfs", "iocost", "blk_throtl", "io_health", "sched-blame"]
 
 [HTTPServer]
@@ -563,7 +563,7 @@ BlackList = [${runqlat_blacklist}"arp", "ascend_npu", "cpu_stat", "cpu_util", "c
 EOF
 }
 
-write_cpuidle_autotracing_config() {
+write_config_cpuidle_autotracing() {
 	local blacklist="" es_config=""
 	[[ ${cpuidle_disabled} != true ]] || blacklist='"cpuidle", '
 	if [[ -n ${STORAGE_ADDR} ]]; then
@@ -573,7 +573,7 @@ write_cpuidle_autotracing_config() {
     Password = \"${STORAGE_PASSWORD}\"
     Index = \"${CPUIDLE_INDEX}\""
 	fi
-	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
+	cat << EOF
 BlackList = [${blacklist}"arp", "ascend_npu", "cpu_stat", "cpu_util", "cpusys", "diskio", "dload", "dropwatch", "hungtask", "iolatency", "iotracing", "irqtracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "memory_threshold_snapshot", "metax_gpu", "mountpoint_perm", "mthreads_gpu", "mthreads_xid", "net_conntrack", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "memory_oom_kill", "ras", "runqlat", "sched_tick", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit", "xfs", "iocost", "blk_throtl", "io_health", "sched-blame"]
 
 [HTTPServer]
@@ -607,7 +607,7 @@ EOF
 }
 
 # The dload case owns its Pod, IO device, endpoint and storage index.
-write_dload_autotracing_config() {
+write_config_dload_autotracing() {
 	local blacklist="" es_config=""
 	[[ ${dload_disabled} != true ]] || blacklist='"dload", '
 	if [[ -n ${STORAGE_ADDR} ]]; then
@@ -617,7 +617,7 @@ write_dload_autotracing_config() {
     Password = \"${STORAGE_PASSWORD}\"
     Index = \"${DLOAD_INDEX}\""
 	fi
-	cat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf" << EOF
+	cat << EOF
 BlackList = [${blacklist}"arp", "ascend_npu", "cpu_stat", "cpu_util", "cpuidle", "cpusys", "diskio", "dropwatch", "hungtask", "iolatency", "iotracing", "irqtracing", "loadavg", "memburst", "memory_buddyinfo", "memory_events", "memory_free", "memory_others", "memory_reclaim", "memory_reclaim_events", "memory_vmstat", "memory_threshold_snapshot", "metax_gpu", "mountpoint_perm", "mthreads_gpu", "mthreads_xid", "net_conntrack", "net_rx_latency", "netdev", "netdev_bonding_lacp", "netdev_dcb", "netdev_events", "netdev_hw", "netdev_qdisc", "netdev_rdma_link", "netdev_txqueue_timeout", "netstat", "memory_oom_kill", "ras", "runqlat", "sched_tick", "sockstat", "softirq", "softlockup", "tcp_memory", "tcp_retransmit", "xfs", "iocost", "blk_throtl", "io_health", "sched-blame"]
 
 [HTTPServer]

@@ -175,7 +175,10 @@ cpuidle_local_events() {
 }
 
 assert_cpuidle_recreated() {
-	[[ $(< "${CPUIDLE_DIR}/a.id") != "$1" ]] || fatal "recreated Pod reused the old container ID"
+	local previous=$1 actual
+	actual=$(< "${CPUIDLE_DIR}/a.id")
+	[[ ${actual} != "${previous}" ]] \
+		|| fatal "${cpuidle_phase}: recreated Pod container ID: expected different from ${previous}, actual=${actual}; inspect ${CPUIDLE_DIR}/a.id"
 }
 
 cpuidle_event_count() {
@@ -187,9 +190,11 @@ cpuidle_ready_events() {
 }
 
 assert_cpuidle_no_events() {
-	cpuidle_local_events > "${HUATUO_BAMAI_TEST_TMPDIR}/local.json"
-	[[ $(jq length "${HUATUO_BAMAI_TEST_TMPDIR}/local.json") -eq 0 ]] \
-		|| fatal "${cpuidle_phase}: unexpected cpuidle event"
+	local file="${HUATUO_BAMAI_TEST_TMPDIR}/local.json" actual
+	cpuidle_local_events > "${file}"
+	actual=$(jq length "${file}")
+	[[ ${actual} -eq 0 ]] \
+		|| fatal "${cpuidle_phase}: cpuidle event count: expected=0, actual=${actual}; inspect ${file}"
 	cpuidle_status
 }
 
@@ -228,7 +233,8 @@ assert_cpuidle_logs() {
 }
 
 cpuidle_start() {
-	integration_huatuo_bamai_start write_cpuidle_autotracing_config --region e2e \
+	write_config_cpuidle_autotracing > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf"
+	huatuo_bamai_start --config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" --config bamai.conf --region e2e \
 		--tools-bin-dir "${ROOT_DIR}/_output/bin"
 	wait_until 15 0.5 cpuidle_status || fatal "cpuidle lifecycle metrics did not become ready"
 }
@@ -320,12 +326,13 @@ assert_cpuidle_events() {
 }
 
 cpuidle_capture() {
-	local suffix=$1 mode=$2 milli=$3 channel=$4 before
+	local suffix=$1 mode=$2 milli=$3 channel=$4 before expected
 	before=$(cpuidle_event_count "${suffix}")
 	cpuidle_command "${suffix}" "${mode}" "${milli}"
 	cpuidle_reference "${suffix}" "${suffix}-high" 4
-	wait_until 35 0.5 cpuidle_ready_events "${suffix}" "$((before + 1))" \
-		|| fatal "${cpuidle_phase}: ${channel} spike produced no target event"
+	expected=$((before + 1))
+	wait_until 35 0.5 cpuidle_ready_events "${suffix}" "${expected}" \
+		|| fatal "${cpuidle_phase}: ${channel} event count for container $(< "${CPUIDLE_DIR}/${suffix}.id"): expected>=${expected}, actual=$(cpuidle_event_count "${suffix}"); inspect ${HUATUO_BAMAI_TEST_TMPDIR}/events/cpuidle and ${HUATUO_BAMAI_TEST_TMPDIR}/${suffix}-high.reference.jsonl"
 	assert_cpuidle_events "${suffix}" "${channel}"
 	cpuidle_status
 }
@@ -357,7 +364,7 @@ assert_cpuidle_invalid_config() (
 	percentage) cpuidle_thresholds[5]=101 ;;
 	regex) cpuidle_include='[' ;;
 	esac
-	write_cpuidle_autotracing_config
+	write_config_cpuidle_autotracing > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf"
 	timeout 15 "${HUATUO_BAMAI_BIN}" --region e2e --disable-kubelet --config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" \
 		--config bamai.conf > "${HUATUO_BAMAI_TEST_TMPDIR}/expected-error.log" 2>&1 || status=$?
 	((status != 0 && status != 124 && status != 137)) || fatal "${name}: invalid cpuidle config did not fail promptly"

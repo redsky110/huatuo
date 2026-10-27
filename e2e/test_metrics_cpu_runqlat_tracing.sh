@@ -111,7 +111,9 @@ runqlat_restart() {
 		cp "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log" "${RUNQLAT_DIR}/daemon-${runqlat_daemon_generation}.log"
 	fi
 	runqlat_daemon_generation=$((runqlat_daemon_generation + 1))
-	integration_huatuo_bamai_start write_runqlat_config --region e2e --disable-storage
+	write_config_runqlat > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf"
+	huatuo_bamai_start --config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" --config bamai.conf \
+		--region e2e --disable-storage
 }
 
 assert_runqlat_logs() {
@@ -239,20 +241,26 @@ runqlat_phase() {
 
 assert_runqlat_growth() {
 	local phase=$1 name=$2 zone=$3
+	local file="${RUNQLAT_DIR}/${phase}-growth.json" expected="host/container deltas >=0 and totals >0"
+	if ((zone >= 0)); then expected+=", zone-${zone} deltas >0"; fi
 	jq -en --slurpfile before "${RUNQLAT_DIR}/${phase}-before.json" --slurpfile after "${RUNQLAT_DIR}/${phase}-after.json" \
-		--arg pod "${name}" --argjson zone "${zone}" '
+		--arg pod "${name}" '
   def delta($a; $b): [range(0; 4) as $i | $a[$i] - $b[$i]];
   {host: delta($after[0].Host; $before[0].Host),
-   container: delta($after[0].Containers[$pod]; $before[0].Containers[$pod])} |
-  if all(.[]; all(.[]; . >= 0) and add > 0 and (if $zone >= 0 then .[$zone] > 0 else true end))
-  then . else error("host/container latency counters regressed or did not grow") end
- ' | tee "${RUNQLAT_DIR}/${phase}-growth.json"
+   container: delta($after[0].Containers[$pod]; $before[0].Containers[$pod])}
+ ' > "${file}"
+	jq -e --argjson zone "${zone}" '
+  all(.[]; all(.[]; . >= 0) and add > 0 and (if $zone >= 0 then .[$zone] > 0 else true end))
+ ' "${file}" > /dev/null \
+		|| fatal "${phase}: expected ${expected}; actual=$(jq -c . "${file}"); inspect ${RUNQLAT_DIR}/${phase}-{before,after}.json and ${file}"
+	cat "${file}"
 }
 
 assert_runqlat_zones() {
 	local zone
 	for zone in 1 2 3; do
-		[[ ${runqlat_zones_seen[zone]} == true ]] || fatal "zone-${zone} did not grow during same-CPU contention"
+		[[ ${runqlat_zones_seen[zone]} == true ]] \
+			|| fatal "runqlat contention: expected zone-${zone} growth in both host and container, actual zones_seen=[${runqlat_zones_seen[*]}]; inspect ${RUNQLAT_DIR}/workers-*-growth.json"
 	done
 }
 

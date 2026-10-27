@@ -99,7 +99,9 @@ cpu_util_restart_daemon() {
 		cp "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log" "${CPU_UTIL_DIR}/daemon-${cpu_util_daemon_generation}.log"
 	fi
 	cpu_util_daemon_generation=$((cpu_util_daemon_generation + 1))
-	integration_huatuo_bamai_start write_cpu_util_config --region e2e --disable-storage
+	write_config_cpu_util > "${HUATUO_BAMAI_TEST_TMPDIR}/bamai.conf"
+	huatuo_bamai_start --config-dir "${HUATUO_BAMAI_TEST_TMPDIR}" --config bamai.conf \
+		--region e2e --disable-storage
 }
 
 cpu_util_command() {
