@@ -512,6 +512,20 @@ dload_reference_stop() {
 dload_case_cleanup() {
 	local status=$?
 	trap - EXIT
+	if [[ ${status} -ne 0 ]]; then
+		# Preserve blocked tasks before releasing IO or deleting the Pod.
+		if [[ -n ${dload_cgroup:-} ]]; then
+			timeout 5 "${DLOAD_BIN}" sample --cgroup "${dload_cgroup}" \
+				> "${HUATUO_BAMAI_TEST_TMPDIR}/tasks-failure.json" \
+				2> "${HUATUO_BAMAI_TEST_TMPDIR}/tasks-failure.err" || true
+		fi
+		if [[ -n ${dload_pod:-} ]]; then
+			kubectl --request-timeout=5s logs -n "${DLOAD_NS}" "${dload_pod}" \
+				> "${HUATUO_BAMAI_TEST_TMPDIR}/pod-failure.log" 2>&1 || true
+		fi
+		kubectl --request-timeout=10s describe pod -n "${DLOAD_NS}" -l "${DLOAD_LABEL}" \
+			> "${HUATUO_BAMAI_TEST_TMPDIR}/pods-failure.txt" 2>&1 || true
+	fi
 	cpu_metrics_stop_queries
 	dload_delay 0 || status=1
 	dload_reference_stop
@@ -520,9 +534,6 @@ dload_case_cleanup() {
 	huatuo_bamai_stop || status=1
 	if [[ ${status} -eq 0 ]]; then
 		assert_dload_logs
-	else
-		kubectl --request-timeout=10s describe pod -n "${DLOAD_NS}" -l "${DLOAD_LABEL}" \
-			> "${HUATUO_BAMAI_TEST_TMPDIR}/pods-failure.txt" 2>&1 || true
 	fi
 	exit "${status}"
 }
@@ -652,10 +663,12 @@ dload_run_case() (
 		jq -se 'any(.[]; .stats.nr_uninterruptible == 4 and ([.tasks[] | select(.state == "D")] | length == 4))' \
 			"${dload_work}/samples.jsonl" > /dev/null || fatal "reference never observed four D tasks"
 	fi
-	touch "${dload_work}/stop"
-	wait_until 10 0.5 dload_complete || fatal "stress-ng workload did not stop successfully; inspect pod.log"
-	dload_workers_gone || fatal "stress-ng worker remains after workload completion"
+	# Release delayed reads before asking stress-ng to stop and reap its workers.
 	dload_delay 0
+	touch "${dload_work}/stop"
+	wait_until 10 0.5 dload_complete \
+		|| fatal "stress-ng workload did not stop successfully; inspect ${dload_work}/pod.log and ${HUATUO_BAMAI_TEST_TMPDIR}/tasks-failure.json"
+	dload_workers_gone || fatal "stress-ng worker remains after workload completion"
 	dload_status
 	dload_stop
 	assert_dload_storage "${name}"
