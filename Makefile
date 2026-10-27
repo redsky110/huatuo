@@ -235,6 +235,10 @@ portable-generated: gen-build
 		$(PORTABLE_GENERATED_FILES) $(APP_CMD_OUTPUT)/portable-generated.commit
 
 test: build
+	@bash e2e/run.sh test_metrics_cpu_util.sh
+	@bash e2e/run.sh test_metrics_cpu_stat.sh
+	@bash e2e/run.sh test_metrics_cpu_runqlat_tracing.sh
+	@bash e2e/run.sh test_autotracing_cpuidle.sh
 	@bash e2e/run.sh test_autotracing_dload.sh
 
 unit: gen-build
