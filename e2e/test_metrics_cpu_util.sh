@@ -225,9 +225,11 @@ assert_cpu_util_result() {
     elif $mode == "system" then $accounted > 0 and $r.Sys >= $accounted * 0.1
     elif $mode == "mixed" then $accounted > 0 and $r.User >= $accounted * 0.1 and $r.Sys >= $accounted * 0.1
     else true end);
+  # Host-wide background activity amplifies differences between sampling windows.
   all(.[]; . as $r |
+   (if .Target.Pod == "" then 2 else 1 end) as $min_pp |
    all(["User","Sys","Total"][]; . as $field |
-    ($r.Metrics[$field] - $r.Reference[$field] | fabs) <= ([1, $r.Reference[$field] * 0.05] | max))
+    ($r.Metrics[$field] - $r.Reference[$field] | fabs) <= ([$min_pp, $r.Reference[$field] * 0.05] | max))
    and workload(.Target.Mode; .Target.ExpectedMilli; .Reference; .Cores)
    and (if (.Target.WorkerPIDs | length) > 0 then workload(.Target.WorkerMode; .Target.WorkerExpectedMilli; .Worker; 1) else true end))
  ' "${file}" > /dev/null || fatal "cpu_util metrics/reference or workload classification differs; inspect ${file}"
