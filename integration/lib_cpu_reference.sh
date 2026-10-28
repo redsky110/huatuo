@@ -96,14 +96,14 @@ CPU_REFERENCE_JQ='
 def epoch:
  split(".") as $p | if ($p|length)==1 then fromdateiso8601
  else ($p[0]+"Z"|fromdateiso8601) + ("0."+($p[1]|rtrimstr("Z"))|tonumber) end;
-def average($start; $end; $cores):
+def average($start; $window_end; $cores):
  [range(1; length) as $i | .[$i] as $s | (.[$i-1].timestamp|epoch) as $a |
-  ($s.timestamp|epoch) as $b | ([([$b,$end]|min)-([$a,$start]|max),0]|max) as $dt |
+  ($s.timestamp|epoch) as $b | ([([$b,$window_end]|min)-([$a,$start]|max),0]|max) as $dt |
   select($dt > 0) | if $s.cpu_inst.usage == null then error("missing cAdvisor cpu_inst") else
   {dt: $dt, User: ($s.cpu_inst.usage.user / 1e7 / $cores),
    Sys: ($s.cpu_inst.usage.system / 1e7 / $cores), Total: ($s.cpu_inst.usage.total / 1e7 / $cores)} end] as $rows |
  ($rows|map(.dt)|add // 0) as $seconds |
- if $seconds < ($end-$start)*0.99 then error("cAdvisor samples do not cover the measurement window")
+ if $seconds < ($window_end-$start)*0.99 then error("cAdvisor samples do not cover the measurement window")
  else reduce $rows[] as $r ({User:0,Sys:0,Total:0};
   .User += $r.User*$r.dt/$seconds | .Sys += $r.Sys*$r.dt/$seconds | .Total += $r.Total*$r.dt/$seconds) end;
 '
@@ -152,10 +152,10 @@ cpu_reference_sample() {
 	sleep "${duration}"
 	end=$(date +%s.%N)
 	cpu_reference_stats "${path}" "${output}.after"
-	jq --argjson start "${start}" --argjson end "${end}" --argjson cores "${cores}" \
+	jq --argjson start "${start}" --argjson window_end "${end}" --argjson cores "${cores}" \
 		"${CPU_REFERENCE_JQ}"'
-	 average($start;$end;$cores) as $p |
-	 {at:$end,seconds:($end-$start),cores:$cores,percent:{user:$p.User,system:$p.Sys,total:$p.Total}}' \
+	 average($start;$window_end;$cores) as $p |
+	 {at:$window_end,seconds:($window_end-$start),cores:$cores,percent:{user:$p.User,system:$p.Sys,total:$p.Total}}' \
 		"${output}.after" > "${output}"
 }
 
@@ -207,9 +207,9 @@ cpu_util_collect() {
 	while read -r target; do
 		path=$(jq -r '.UsagePath' <<< "${target}")
 		cpu_reference_stats "${path}" "${output}/reference-${i}.json"
-		jq --argjson start "${start}" --argjson end "${end}" \
+		jq --argjson start "${start}" --argjson window_end "${end}" \
 			--argjson cores "$(jq ".Samples[-1].Cores[${i}]" "${output}/samples.json")" \
-			"${CPU_REFERENCE_JQ}"'average($start;$end;$cores)' "${output}/reference-${i}.json" > "${output}/average-${i}.json"
+			"${CPU_REFERENCE_JQ}"'average($start;$window_end;$cores)' "${output}/reference-${i}.json" > "${output}/average-${i}.json"
 		i=$((i + 1))
 	done < <(jq -c '.[]' "${targets}")
 	[[ -f ${output}/pidstat.txt.json ]] || echo '{"Total":0,"User":0,"Sys":0}' > "${output}/pidstat.txt.json"
@@ -338,8 +338,8 @@ cpu_stat_collect() {
 	end=$(jq '.Samples[-1].At' "${output}/samples.json")
 	while read -r target; do
 		cpu_reference_stats "$(jq -r '.UsagePath' <<< "${target}")" "${output}/reference-${index}.json"
-		jq --argjson start "${start}" --argjson end "${end}" \
-			"${CPU_REFERENCE_JQ}"'average($start;$end;1).Total' "${output}/reference-${index}.json" > "${output}/cpu-${index}.json"
+		jq --argjson start "${start}" --argjson window_end "${end}" \
+			"${CPU_REFERENCE_JQ}"'average($start;$window_end;1).Total' "${output}/reference-${index}.json" > "${output}/cpu-${index}.json"
 		index=$((index + 1))
 	done < <(jq -c '.[]' "${targets}")
 	"${CPU_WAIT_BIN}" percent --before "${output}/00/after.json" --after "${output}/0$((count - 1))/after.json" > "${output}/wait.json"
