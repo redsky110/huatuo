@@ -21,17 +21,16 @@ source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
-source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
 
 require_commands kubectl jq findmnt ss getconf
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
 readonly CPU_UTIL_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-util"
-readonly CPU_UTIL_BIN=${CPU_UTIL_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-util}
 readonly CPU_UTIL_LOAD="${CPU_UTIL_DIR}/cpu-load"
 readonly CPU_UTIL_NS="${BUSINESS_POD_NS}"
 readonly CPU_UTIL_PREFIX="cpu-util-${BASHPID}-${RANDOM}"
 readonly CPU_UTIL_LABEL="app=${CPU_UTIL_PREFIX}"
-readonly CPU_UTIL_TICKS=$(getconf CLK_TCK)
 mkdir -p "${CPU_UTIL_DIR}"
 chmod 755 "${CPU_UTIL_DIR}"
 "${HUATUO_BAMAI_BIN}" --version > "${CPU_UTIL_DIR}/bamai-version.txt"
@@ -53,6 +52,7 @@ cpu_util_cleanup() {
 	fi
 	kubectl --request-timeout=30s delete deployment,daemonset,pod -n "${CPU_UTIL_NS}" \
 		-l "${CPU_UTIL_LABEL}" --ignore-not-found --timeout=30s || status=1
+	cpu_reference_stop || status=1
 	huatuo_bamai_stop || status=1
 	exit "${status}"
 }
@@ -61,6 +61,7 @@ trap cpu_util_cleanup EXIT
 cpu_load_prepare "${CPU_UTIL_DIR}"
 cpu_load_prepare_host "${CPU_UTIL_DIR}"
 cpu_metrics_prepare
+cpu_reference_start "${CPU_UTIL_DIR}"
 
 # The runner changes the UTS hostname; kubelet identifies the actual local node.
 CPU_UTIL_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
@@ -187,7 +188,7 @@ cpu_util_host_target() {
 	fi
 	jq -n --arg path "${CPU_UTIL_USAGE_ROOT}" --arg mode "$1" --argjson expected "$2" \
 		--argjson pids "${pids}" \
-		'{Name: "host", UsagePath: $path, ExpectedMilli: -1, Mode: "", WorkerPIDs: $pids, WorkerMode: $mode, WorkerExpectedMilli: $expected}'
+		'{Name: "host", Pod: "", UsagePath: $path, ExpectedMilli: -1, Mode: "", WorkerPIDs: $pids, WorkerMode: $mode, WorkerExpectedMilli: $expected}'
 }
 
 assert_cpu_util_logs() {
@@ -244,9 +245,7 @@ cpu_util_measure() {
 		'if length == $count then . else error("CPU reference target missing; check container discovery") end' > "${targets}"
 	start=$(($(wc -l < "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log") + 1))
 	log_info "cpu_util phase: ${phase}"
-	"${CPU_UTIL_BIN}" measure --url "${HUATUO_BAMAI_METRICS_API}" --targets "${targets}" \
-		--ticks "${CPU_UTIL_TICKS}" --output "${CPU_UTIL_DIR}/${phase}" \
-		2>&1 | tee "${CPU_UTIL_DIR}/${phase}.log"
+	cpu_util_collect "${targets}" "${CPU_UTIL_DIR}/${phase}" 2>&1 | tee "${CPU_UTIL_DIR}/${phase}.log"
 	assert_cpu_util_samples "${CPU_UTIL_DIR}/${phase}/samples.json"
 	assert_cpu_util_result "${CPU_UTIL_DIR}/${phase}/result.json"
 	assert_cpu_util_logs "${start}"
@@ -283,7 +282,7 @@ if [[ $(getconf _NPROCESSORS_ONLN) -ge 2 ]]; then
 	cpu_util_create Pod "${CPU_UTIL_PREFIX}-two" 2000m two
 	cpu_util_two_pod=$(cpu_util_pod "${CPU_UTIL_PREFIX}-two")
 	cpu_util_target "${cpu_util_two_pod}" two 2000 user 1000 | jq -s '.' > "${CPU_UTIL_DIR}/two-capacity.json"
-	cpu_util_two_capacity=$("${CPU_UTIL_BIN}" capacity --targets "${CPU_UTIL_DIR}/two-capacity.json")
+	cpu_util_two_capacity=$(cpu_reference_capacity "$(jq -c '.[0]' "${CPU_UTIL_DIR}/two-capacity.json")" | jq .Cores)
 	if awk -v cores="${cpu_util_two_capacity}" 'BEGIN { exit !(cores >= 2) }'; then
 		cpu_util_container_phase two-cores-one-worker "${cpu_util_two_pod}" two 2000 user 1000 1000
 		cpu_util_container_phase two-cores-two-workers "${cpu_util_two_pod}" two 2000 user 2000 2000 2
@@ -329,7 +328,7 @@ cpu_util_host_pid=""
 cpu_util_command half mixed 250
 cpu_util_target "${cpu_util_half_pod}" half 500 mixed 250 | jq -s '.' > "${CPU_UTIL_DIR}/concurrent-targets.json"
 cpu_util_concurrent_start=$(($(wc -l < "${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log") + 1))
-"${CPU_UTIL_BIN}" concurrent --output "${CPU_UTIL_DIR}/concurrent-responses" --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_UTIL_DIR}/concurrent-targets.json" \
+cpu_reference_concurrent util "${CPU_UTIL_DIR}/concurrent-targets.json" "${CPU_UTIL_DIR}/concurrent-responses" 40 \
 	> "${CPU_UTIL_DIR}/concurrent-samples.json" 2> "${CPU_UTIL_DIR}/concurrent-requests.log" &
 cpu_util_concurrent_pid=$!
 wait "${cpu_util_concurrent_pid}" || fatal "concurrent metrics queries failed"

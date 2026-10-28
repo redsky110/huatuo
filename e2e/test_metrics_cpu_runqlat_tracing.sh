@@ -20,7 +20,7 @@ source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
-source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_metrics.sh"
 
 runqlat_cleanup() {
 	local status=$?

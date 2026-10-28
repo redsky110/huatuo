@@ -22,19 +22,18 @@ source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/integration/lib_storage.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
-source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
 
 require_commands kubectl jq findmnt getconf docker timeout
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
 [[ ${EUID} -eq 0 ]] || skip "requires root for container CPU profiling"
 
 readonly CPUIDLE_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpuidle"
-readonly CPUIDLE_BIN=${CPUIDLE_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpuidle-reference}
 readonly CPUIDLE_PREFIX="cpuidle-${BASHPID}-${RANDOM}"
 readonly CPUIDLE_NS="${CPUIDLE_PREFIX}"
 readonly CPUIDLE_LABEL="app=${CPUIDLE_PREFIX}"
 readonly CPUIDLE_INDEX="huatuo_e2e_${CPUIDLE_PREFIX}"
-readonly CPUIDLE_TICKS=$(getconf CLK_TCK)
 cpuidle_interval=2
 cpuidle_duration=2
 cpuidle_cooldown=30
@@ -62,6 +61,7 @@ cpuidle_cleanup() {
 		--ignore-not-found --timeout=30s || status=1
 	kubectl --request-timeout=30s delete namespace "${CPUIDLE_NS}" \
 		--ignore-not-found --timeout=30s || status=1
+	cpu_reference_stop || status=1
 	huatuo_bamai_stop || status=1
 	storage_dump_logs "${CPUIDLE_DIR}/elasticsearch.log" || status=1
 	storage_stop || status=1
@@ -72,9 +72,9 @@ trap cpuidle_cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 
-readonly CPUIDLE_UTIL_BIN=${CPU_UTIL_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-util}
 cpu_load_prepare "${CPUIDLE_DIR}"
 cpu_metrics_prepare
+cpu_reference_start "${CPUIDLE_DIR}"
 
 CPUIDLE_PORT=$(allocate_available_port) || fatal "cannot allocate cpuidle API port"
 CPUIDLE_KUBELET_PORT=${KUBELET_PODS_API##*:}
@@ -161,7 +161,7 @@ cpuidle_target() {
 		--arg cpuset "${cpuset}" --argjson quota "${quota}" \
 		'[{Name: $pod, Pod: $pod, UsagePath: $usage, CPUPath: $cpu, CpusetPath: $cpuset, QuotaMilli: $quota}]' \
 		> "${CPUIDLE_DIR}/${suffix}.target.json"
-	"${CPUIDLE_UTIL_BIN}" capacity --targets "${CPUIDLE_DIR}/${suffix}.target.json" > "${CPUIDLE_DIR}/${suffix}.cores"
+	cpu_reference_capacity "$(jq -c '.[0]' "${CPUIDLE_DIR}/${suffix}.target.json")" | jq .Cores > "${CPUIDLE_DIR}/${suffix}.cores"
 	printf '%s\n' "${usage}" > "${CPUIDLE_DIR}/${suffix}.usage"
 	log_info "cpuidle target: pod=${CPUIDLE_PREFIX}-${suffix} id=${id} capacity=$(< "${CPUIDLE_DIR}/${suffix}.cores") cgroup=${cpu}"
 }
@@ -200,9 +200,9 @@ assert_cpuidle_no_events() {
 
 cpuidle_reference() {
 	local suffix=$1 name=$2 duration=${3:-4}
-	"${CPUIDLE_BIN}" sample --cgroup "$(< "${CPUIDLE_DIR}/${suffix}.usage")" \
-		--cores "$(< "${CPUIDLE_DIR}/${suffix}.cores")" --ticks "${CPUIDLE_TICKS}" --duration "${duration}s" \
-		> "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl"
+	cpu_reference_sample "$(< "${CPUIDLE_DIR}/${suffix}.usage")" \
+		"$(< "${CPUIDLE_DIR}/${suffix}.cores")" "${duration}" \
+		"${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl"
 	assert_cpuidle_reference "${suffix}" "${name}"
 	log_info "cpuidle reference: phase=${cpuidle_phase} pod=${CPUIDLE_PREFIX}-${suffix} $(jq -c '.percent' "${HUATUO_BAMAI_TEST_TMPDIR}/${name}.reference.jsonl")"
 }

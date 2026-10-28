@@ -21,18 +21,18 @@ source "${ROOT_DIR}/integration/config.sh"
 source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
-source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
 
-require_commands kubectl jq findmnt ss sysctl taskset getconf
+require_commands kubectl jq findmnt ss sysctl taskset getconf "${CGGET_BIN:-cgget}"
 require_readable "${KUBELET_CERT}" "${KUBELET_KEY}" /proc/sys/kernel/sched_schedstats
 readonly CPU_STAT_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-stat"
-readonly CPU_STAT_BIN=${CPU_STAT_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-stat}
+readonly CPU_WAIT_BIN=${CPU_WAIT_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-wait-reference}
 readonly CPU_STAT_LOAD="${CPU_STAT_DIR}/cpu-load"
 readonly CPU_STAT_NS="${BUSINESS_POD_NS}"
 readonly CPU_STAT_PREFIX="cpu-stat-${BASHPID}-${RANDOM}"
 readonly CPU_STAT_LABEL="app=${CPU_STAT_PREFIX}"
 readonly CPU_STAT_SCHEDSTATS=$(sysctl -n kernel.sched_schedstats)
-readonly CPU_STAT_TICKS=$(getconf CLK_TCK)
 cpu_stat_disabled=false
 cpu_stat_wait=false
 cpu_stat_host_pid=""
@@ -57,6 +57,7 @@ cpu_stat_cleanup() {
 	fi
 	kubectl --request-timeout=30s delete pod -n "${CPU_STAT_NS}" -l "${CPU_STAT_LABEL}" \
 		--ignore-not-found --timeout=30s || status=1
+	cpu_reference_stop || status=1
 	huatuo_bamai_stop || status=1
 	sysctl -q -w "kernel.sched_schedstats=${CPU_STAT_SCHEDSTATS}" || status=1
 	[[ $(sysctl -n kernel.sched_schedstats) == "${CPU_STAT_SCHEDSTATS}" ]] || status=1
@@ -66,6 +67,7 @@ trap cpu_stat_cleanup EXIT
 
 cpu_load_prepare "${CPU_STAT_DIR}"
 cpu_metrics_prepare
+cpu_reference_start "${CPU_STAT_DIR}"
 
 CPU_STAT_NODE=$(kubelet_pods_json | jq -er '[.items[].spec.nodeName] | unique | if length == 1 then .[0] else error("cannot identify local kubelet node") end')
 CPU_STAT_CPU=$(awk '/Cpus_allowed_list/ { n=split($2, cpus, /[-,]/); print cpus[n] }' /proc/self/status)
@@ -331,7 +333,7 @@ assert_cpu_stat_result() {
   (if $o.CounterMode != "unthrottled" then .Deltas | to_entries[] | "delta_\(.key)=\(.value)" else empty end)' "${file}"
 	jq -e '
   .Options as $o | .WorkerCPU as $worker |
-  all(.Windows[];
+  all(.Windows[]; . as $window |
    (if $o.WorkerPID > 0 then 100 - $worker else .Target.ExpectedCPU end) as $cpu |
    (if $o.WorkerPID > 0 then $worker else .Target.ExpectedWait end) as $wait |
    ($cpu < 0 or (.CPU - $cpu | fabs) <= 10)
@@ -343,7 +345,7 @@ assert_cpu_stat_result() {
    and (.Deltas | to_entries | all(.[];
     (.key == "nr_throttled" or .key == "throttled_time") as $throttle |
     .value >= 0
-    and (if ($o.CounterMode == "throttled" and $throttle) or ($o.CounterMode == "burst" and ($throttle | not)) then .value > 0 else true end)
+    and (if ($o.CounterMode == "throttled" and $throttle) or ($o.CounterMode == "burst" and ($throttle | not)) then .value > 0 and $window.MetricDeltas[.key] > 0 else true end)
     and (if $o.CounterMode == "stable" or $o.CounterMode == "settled" or ($o.CounterMode == "unthrottled" and $throttle) then .value == 0 else true end))))
   and (if $o.WorkerPID > 0 then $worker > 2 and $worker <= 100 else true end)
  ' "${file}" > /dev/null || fatal "cpu_stat workload, wait percentage or throttle/burst growth differs; inspect ${file}"
@@ -379,8 +381,7 @@ cpu_stat_measure() {
 	# Container discovery and the first wait-percent baseline can lag HTTP readiness.
 	wait_until 60 1 cpu_stat_ready "${targets}" "${CPU_STAT_DIR}/${phase}-ready.json" \
 		|| fatal "${phase}: target cpu_stat metrics did not become ready; inspect ${CPU_STAT_DIR}/${phase}-ready.json"
-	"${CPU_STAT_BIN}" measure --url "${HUATUO_BAMAI_METRICS_API}" --targets "${targets}" --wait="${cpu_stat_wait}" \
-		--ticks "${CPU_STAT_TICKS}" --output "${CPU_STAT_DIR}/${phase}" "$@" 2>&1 | tee "${CPU_STAT_DIR}/${phase}.log"
+	cpu_stat_collect "${targets}" "${CPU_STAT_DIR}/${phase}" "$@" 2>&1 | tee "${CPU_STAT_DIR}/${phase}.log"
 	cpu_stat_log_samples "${CPU_STAT_DIR}/${phase}/samples.json" | tee -a "${CPU_STAT_DIR}/${phase}.log"
 	assert_cpu_stat_samples "${CPU_STAT_DIR}/${phase}/samples.json"
 	assert_cpu_stat_result "${CPU_STAT_DIR}/${phase}/result.json" 2>&1 | tee -a "${CPU_STAT_DIR}/${phase}.log"
@@ -496,7 +497,6 @@ cpu_stat_restart_daemon
 cpu_stat_single_phase blacklist-reenabled 100 0
 
 # Keep concurrent scrapes outside numeric windows: they advance the baseline.
-"${CPU_STAT_BIN}" concurrent --output "${CPU_STAT_DIR}/concurrent-responses" --url "${HUATUO_BAMAI_METRICS_API}" --targets "${CPU_STAT_DIR}/targets.json" \
-	--wait="${cpu_stat_wait}" --ticks "${CPU_STAT_TICKS}" > "${CPU_STAT_DIR}/concurrent-samples.json" 2> "${CPU_STAT_DIR}/concurrent.log"
+(cpu_reference_concurrent stat "${CPU_STAT_DIR}/targets.json" "${CPU_STAT_DIR}/concurrent-responses" 8) > "${CPU_STAT_DIR}/concurrent-samples.json" 2> "${CPU_STAT_DIR}/concurrent.log"
 assert_cpu_stat_samples "${CPU_STAT_DIR}/concurrent-samples.json" true
 log_info "cpu_stat E2E passed; artifacts: ${CPU_STAT_DIR}"

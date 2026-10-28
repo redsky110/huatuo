@@ -443,6 +443,7 @@ log_info "profiling node and apiserver storage configs agree and isolate workspa
 (
 	work="${HUATUO_BAMAI_TEST_TMPDIR}/worker-ports"
 	mkdir -p "${work}"
+	read -r ephemeral_start ephemeral_end < /proc/sys/net/ipv4/ip_local_port_range
 	ss() { echo 'LISTEN 0 128 127.0.0.1:20000 0.0.0.0:*'; }
 	export INTEGRATION_PORT_BASE=20000 INTEGRATION_PORT_DIR="${work}/ports"
 	pids=()
@@ -455,8 +456,21 @@ log_info "profiling node and apiserver storage configs agree and isolate workspa
 	for file in "${work}/"port-*; do
 		port=$(cat "${file}")
 		((port > 20000 && port < 21000)) || fatal "worker port outside its block: ${port}"
+		((port < ephemeral_start || port > ephemeral_end)) || fatal "worker port overlaps ephemeral range: ${port}"
 	done
 	assert_eq "$(INTEGRATION_PORT_BASE=21000 INTEGRATION_PORT_DIR="${work}/other" allocate_available_port)" 21000 "separate worker block"
+	(
+		unset INTEGRATION_PORT_BASE INTEGRATION_PORT_DIR
+		for protocol in tcp udp; do
+			for ((i = 0; i < 32; i++)); do
+				port=$(allocate_available_port "${protocol}") || fatal "${protocol} port allocation failed"
+				((port > 20000 && port <= 40000)) || fatal "random port outside allocation range: ${port}"
+				((port < ephemeral_start || port > ephemeral_end)) || fatal "random port overlaps ephemeral range: ${port}"
+			done
+		done
+		ss() { return 1; }
+		if allocate_available_port; then fatal "random allocation ignored failed socket query"; fi
+	)
 	ss() { return 1; }
 	if allocate_available_port; then fatal "allocation ignored failed socket query"; fi
 )

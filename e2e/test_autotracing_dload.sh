@@ -23,7 +23,7 @@ source "${ROOT_DIR}/integration/lib_cgroup.sh"
 source "${ROOT_DIR}/integration/lib_storage.sh"
 source "${ROOT_DIR}/e2e/lib.sh"
 source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
-source "${ROOT_DIR}/e2e/lib_cpu_metrics.sh"
+source "${ROOT_DIR}/integration/lib_cpu_metrics.sh"
 
 readonly CURL_TIMEOUT=(--connect-timeout 2 --max-time 5)
 readonly DLOAD_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/dload"

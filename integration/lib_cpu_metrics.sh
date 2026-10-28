@@ -19,11 +19,58 @@ set -euo pipefail
 cpu_metrics_query_pids=()
 
 cpu_metrics_prepare() {
-	CPU_METRICS_BIN=${CPU_METRICS_HELPER_BIN:-${ROOT_DIR}/_output/tests/cpu-metrics}
+	require_commands curl jq tar sha256sum flock
+	PROM2JSON_BIN=${PROM2JSON_BIN:-${ROOT_DIR}/_output/tools/prom2json-1.5.0}
+	if [[ ! -x ${PROM2JSON_BIN} ]]; then
+		cpu_metrics_install_prom2json 9> "${ROOT_DIR}/_output/prom2json.lock"
+	fi
+}
+
+cpu_metrics_install_prom2json() {
+	flock 9
+	[[ ! -x ${PROM2JSON_BIN} ]] || return 0
+	local arch archive url directory checksum
+	case $(uname -m) in
+	x86_64)
+		arch=amd64
+		checksum=5935363cc8c88360e3aa275ddc5a754ad95f6bab6b6052978e686300baa5a4d6
+		;;
+	aarch64)
+		arch=arm64
+		checksum=9b60ac476ffb838e5eb80489394c0590254ff1303b9a0c83364ded2cfa5a7353
+		;;
+	*) fatal "no prom2json prebuilt binary selected for $(uname -m)" ;;
+	esac
+	directory=$(mktemp -d "${ROOT_DIR}/_output/prom2json.XXXXXX")
+	archive="prom2json-1.5.0.linux-${arch}.tar.gz"
+	url=https://github.com/prometheus/prom2json/releases/download/v1.5.0
+	curl -fLsS --connect-timeout 10 --max-time 120 "${url}/${archive}" -o "${directory}/${archive}"
+	(
+		cd "${directory}"
+		printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum -c -
+	)
+	tar --no-same-owner -xzf "${directory}/${archive}" -C "${directory}"
+	mkdir -p "$(dirname "${PROM2JSON_BIN}")"
+	install -m 755 "${directory}/prom2json-1.5.0.linux-${arch}/prom2json" "${PROM2JSON_BIN}.tmp"
+	mv "${PROM2JSON_BIN}.tmp" "${PROM2JSON_BIN}"
 }
 
 cpu_metrics_read() {
-	"${CPU_METRICS_BIN}" --url "${HUATUO_BAMAI_METRICS_API}" --raw-output "$1.prom" > "$1"
+	local file=$1 status
+	status=$(curl --noproxy '*' -sS --connect-timeout 2 --max-time 5 -o "${file}.prom" -w '%{http_code}' \
+		"${HUATUO_BAMAI_METRICS_API}" 2> "${file}.http") || {
+		cat "${file}.http" >&2
+		return 1
+	}
+	printf 'http_status=%s\n' "${status}" >> "${file}.http"
+	[[ ${status} == 200 ]] || {
+		echo "metrics HTTP ${status}; inspect ${file}.prom" >&2
+		return 1
+	}
+	"${PROM2JSON_BIN}" < "${file}.prom" > "${file}.parsed" || return 1
+	jq 'map({key: .name, value: {type: (.type | ascii_upcase), help: .help,
+	 samples: [.metrics[]? | select(has("value")) | {labels: (.labels // {}), value: (.value | tonumber)}]}}) | from_entries' \
+		"${file}.parsed" > "${file}"
 }
 
 assert_cpu_tracing_status() {
@@ -117,8 +164,7 @@ cpu_metrics_query_batch() {
 	for ((round = 1; round <= rounds; round++)); do
 		for ((query = 1; query <= workers; query++)); do
 			file="${directory}/query-${round}-${query}.json"
-			"${CPU_METRICS_BIN}" --url "${HUATUO_BAMAI_METRICS_API}" --raw-output "${file}.prom" \
-				> "${file}" 2> "${file}.err" &
+			cpu_metrics_read "${file}" 2> "${file}.err" &
 			cpu_metrics_query_pids+=("$!")
 		done
 		cpu_metrics_wait_queries || return 1
