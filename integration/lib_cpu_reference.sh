@@ -253,18 +253,32 @@ cpu_reference_concurrent() {
 }
 
 cpu_stat_reference() {
-	local targets=$1 output=$2 target i=0 name
+	local targets=$1 output=$2 target i=0 path
 	"${CPU_WAIT_BIN}" sample --targets "${targets}" > "${output}.wait"
 	while read -r target; do
-		name=$(cpu_reference_name "$(jq -r '.CPUPath' <<< "${target}")")
-		# Released cAdvisor cannot populate v1 burst counters; cgget reads both versions.
-		"${CGGET_BIN:-cgget}" -n -v -r cpu.stat "${name}" > "${output}.${i}.cgget"
-		awk '$1~/^(nr_throttled|throttled_time|throttled_usec|nr_bursts|burst_time|burst_usec)$/ {print $1,$2}' \
-			"${output}.${i}.cgget" | jq -Rn --argjson i "${i}" --slurpfile wait "${output}.wait" '
-		 [inputs | split(" ") | {key:.[0],value:(.[1]|tonumber)}] | from_entries |
-		 (if has("throttled_usec") then .throttled_time=.throttled_usec*1000 | del(.throttled_usec) else . end) |
-		 (if has("burst_usec") then .burst_time=.burst_usec*1000 | del(.burst_usec) else . end) |
-		 . as $fields | $wait[0][$i] | .Fields += $fields' > "${output}.${i}.json"
+		path=$(jq -r '.CPUPath' <<< "${target}")
+		cpu_reference_stats "${path}" "${output}.${i}.cadvisor"
+		if [[ -f ${path}/cpu.max ]]; then
+			# cAdvisor reports zero even when the kernel does not export a counter.
+			jq -e --rawfile native "${path}/cpu.stat" '
+			 ($native | split("\n") | map(split(" ")[0])) as $keys | .[-1].cpu.cfs |
+			 {nr_throttled:.throttled_periods,throttled_usec:.throttled_time,
+			  nr_bursts:.bursts_periods,burst_usec:.burst_time} |
+			 with_entries(select(.key as $key | $keys | index($key))) |
+			 with_entries(.key = ({throttled_usec:"throttled_time",burst_usec:"burst_time"}[.key] // .key))
+			' "${output}.${i}.cadvisor" > "${output}.${i}.fields"
+		else
+			# cAdvisor's v1 reader omits burst counters. Supplement only these
+			# fields from one cpu.stat read; throttle counters still use cAdvisor.
+			jq -e --rawfile native "${path}/cpu.stat" '
+			 .[-1].cpu.cfs | {nr_throttled:.throttled_periods,throttled_time:.throttled_time} +
+			 ($native | split("\n") |
+			  map(capture("^(?<key>nr_bursts|burst_time)\\s+(?<value>[0-9]+)$") |
+			      .value |= tonumber) | from_entries)
+			' "${output}.${i}.cadvisor" > "${output}.${i}.fields"
+		fi
+		jq --argjson i "${i}" --slurpfile wait "${output}.wait" \
+			'. as $fields | $wait[0][$i] | .Fields += $fields' "${output}.${i}.fields" > "${output}.${i}.json"
 		i=$((i + 1))
 	done < <(jq -c '.[]' "${targets}")
 	jq -s '.' "${output}".*.json > "${output}"
