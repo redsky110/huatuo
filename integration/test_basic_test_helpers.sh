@@ -317,6 +317,52 @@ assert_helper_port_allocation() (
 	if allocate_available_port; then fatal "allocation ignored failed socket query"; fi
 )
 
+assert_cpu_reference_window() (
+	source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
+	local work="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-reference-window" mode calls status expected end
+	mkdir -p "${work}"
+	CPU_REFERENCE_URL=http://fixture
+	end=$(jq -n '"2026-01-01T00:00:10Z" | fromdateiso8601')
+	jq -n --argjson end "${end}" '
+	 {"/fixture": [range(0; 10) | {timestamp: ($end-10+. | todateiso8601),
+	  cpu_inst: {usage: {user: 200000000, system: 300000000, total: 500000000}}}]}
+	' > "${work}/fixture-stale.json"
+	jq '."/fixture" += [(."/fixture"[-1] | .timestamp = "2026-01-01T00:00:10.125Z")]' \
+		"${work}/fixture-stale.json" > "${work}/fixture-fresh.json"
+	cpu_reference_name() { echo /fixture; }
+	curl() {
+		calls=$((calls + 1))
+		if [[ ${mode} == fresh || (${mode} == delayed && ${calls} -gt 1) ]]; then
+			cp "${work}/fixture-fresh.json" "${@: -1}"
+		else
+			cp "${work}/fixture-stale.json" "${@: -1}"
+		fi
+	}
+	# Advance the retry deadline without making the framework test wait 30 seconds.
+	sleep() { SECONDS=$((SECONDS + 15)); }
+	for mode in default fresh delayed timeout; do
+		calls=0 status=0 expected=0
+		if [[ ${mode} == default ]]; then
+			cpu_reference_stats /fixture "${work}/${mode}.json"
+		else
+			cpu_reference_stats /fixture "${work}/${mode}.json" "${end}" \
+				> "${work}/${mode}.log" 2>&1 || status=$?
+		fi
+		[[ ${mode} != timeout ]] || expected=1
+		assert_eq "${status}" "${expected}" "${mode}: cAdvisor window coverage"
+		case ${mode} in
+		default | fresh) assert_eq "${calls}" 1 "${mode}: no unnecessary retry" ;;
+		delayed | timeout) assert_eq "${calls}" 2 "${mode}: bounded sample retry" ;;
+		esac
+	done
+	jq -e "${CPU_REFERENCE_JQ}""average($((end - 10)); ${end}; 1) | .Total == 50" \
+		"${work}/delayed.json" > /dev/null
+	grep -Fq 'precedes window end' "${work}/timeout.json.err" \
+		|| fatal "cAdvisor timeout omitted the latest sample timestamp"
+	grep -Fq "window end ${end}" "${work}/timeout.log" \
+		|| fatal "cAdvisor timeout omitted the required window endpoint"
+)
+
 cpu_image_status=0
 bash -eu -s > "${HUATUO_BAMAI_TEST_TMPDIR}/cpu-image-failure.log" 2>&1 << 'SH' || cpu_image_status=$?
 source "$ROOT_DIR/integration/lib.sh"
@@ -340,4 +386,5 @@ assert_process_shutdown graceful_failure 7
 assert_process_shutdown forced 137
 assert_process_shutdown custom_signal 0 USR2
 assert_helper_port_allocation
+assert_cpu_reference_window
 log_info "framework logging, assertions, HTTP diagnostics, service addresses, process shutdown and port allocation passed"
