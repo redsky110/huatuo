@@ -396,13 +396,16 @@ assert_cpu_reference_window() (
 	for mode in default fresh delayed timeout; do
 		calls=0 status=0 expected=0
 		if [[ ${mode} == default ]]; then
-			cpu_reference_stats /fixture "${work}/${mode}.json"
+			cpu_reference_stats /fixture "${work}/${mode}.json" \
+				> "${work}/${mode}.stdout" 2> "${work}/${mode}.log"
 		else
 			cpu_reference_stats /fixture "${work}/${mode}.json" "${end}" \
-				> "${work}/${mode}.log" 2>&1 || status=$?
+				> "${work}/${mode}.stdout" 2> "${work}/${mode}.log" || status=$?
 		fi
 		[[ ${mode} != timeout ]] || expected=1
 		assert_eq "${status}" "${expected}" "${mode}: cAdvisor window coverage"
+		[[ ! -s ${work}/${mode}.stdout ]] || fatal "${mode}: cAdvisor polling logs polluted stdout"
+		grep -Fq 'wait attempt' "${work}/${mode}.log" || fatal "${mode}: cAdvisor polling diagnostics missing from stderr"
 		case ${mode} in
 		default | fresh) assert_eq "${calls}" 1 "${mode}: no unnecessary retry" ;;
 		delayed | timeout) assert_eq "${calls}" 2 "${mode}: bounded sample retry" ;;

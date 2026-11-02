@@ -75,7 +75,7 @@ cpu_reference_name() {
 cpu_reference_stats() {
 	local path=$1 output=$2 window_end=${3:-0} name
 	name=$(cpu_reference_name "${path}") || return 1
-	wait_until 30 1 cpu_reference_stats_ready "${name}" "${output}" "${window_end}" && return 0
+	wait_until 30 1 cpu_reference_stats_ready "${name}" "${output}" "${window_end}" >&2 && return 0
 	echo "cAdvisor CPU samples for ${name} did not cover window end ${window_end}; inspect ${output}.response and ${output}.err" >&2
 	return 1
 }
