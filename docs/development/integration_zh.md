@@ -60,7 +60,8 @@ sudo bash e2e/run.sh test_autotracing_dload.sh
 基准环境为 4 核、8 GB 内存的 Kubernetes VM；需要可访问本机 kubelet API，
 客户端证书路径通过 `KUBELET_CERT`、`KUBELET_KEY` 指定。
 
-本地运行需安装 `stress-ng` 和 `sysstat`，VM 流程会安装这些软件包。
+本地运行需安装 `stress-ng`；CPU util/stat 的 worker 参考采样还需要 `sysstat`。
+VM 流程会安装这两个软件包。
 Kubernetes 运行时需要能拉取负载镜像；CPU 参考采集、cpuidle 和 dload
 还需要 Docker 及其测试镜像的访问权限。提前执行 `make build`，
 测试运行时不需要 Go 编译器。

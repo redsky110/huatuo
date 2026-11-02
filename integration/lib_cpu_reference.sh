@@ -20,10 +20,9 @@ CPU_REFERENCE_IMAGE=${CPU_REFERENCE_IMAGE:-ghcr.io/google/cadvisor@sha256:e02855
 cpu_reference_container=
 
 cpu_reference_start() {
-	require_commands docker curl jq pidstat
+	require_commands docker curl jq
 	CPU_REFERENCE_DIR="$1/reference"
 	mkdir -p "${CPU_REFERENCE_DIR}"
-	pidstat -V > "${CPU_REFERENCE_DIR}/sysstat-version.txt"
 	docker image inspect "${CPU_REFERENCE_IMAGE}" > /dev/null 2>&1 \
 		|| timeout 300 docker pull "${CPU_REFERENCE_IMAGE}"
 	local port
@@ -137,6 +136,11 @@ cpu_reference_capacity() {
 	  (if $milli<0 then $online else $milli/1000 end)]|min)} | select(.Cores>0)'
 }
 
+cpu_reference_prepare_pidstat() {
+	require_commands pidstat
+	pidstat -V > "${CPU_REFERENCE_DIR}/sysstat-version.txt"
+}
+
 cpu_reference_pidstat() {
 	local pids=$1 duration=$2 output=$3
 	LC_ALL=C S_TIME_FORMAT=ISO pidstat -u -p "${pids}" 1 "${duration}" > "${output}"
@@ -193,6 +197,7 @@ cpu_util_collect() {
 	cpu_util_snapshot "${targets}" "${output}/00"
 	pids=$(jq -r '[.[].WorkerPIDs[]?] | unique | map(tostring) | join(",")' "${targets}")
 	if [[ -n ${pids} ]]; then
+		cpu_reference_prepare_pidstat
 		cpu_reference_pidstat "${pids}" 10 "${output}/pidstat.txt" &
 		pidstat_pid=$!
 	fi
@@ -338,6 +343,7 @@ cpu_stat_collect() {
 	local pidstat_pid=
 	cpu_stat_snapshot "${targets}" "${output}/00"
 	if ((worker > 0)); then
+		cpu_reference_prepare_pidstat
 		cpu_reference_pidstat "${worker}" 10 "${output}/pidstat.txt" &
 		pidstat_pid=$!
 	fi

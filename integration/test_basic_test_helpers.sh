@@ -317,6 +317,58 @@ assert_helper_port_allocation() (
 	if allocate_available_port; then fatal "allocation ignored failed socket query"; fi
 )
 
+assert_cpu_reference_startup() (
+	source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
+	local work="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-reference-startup" mode status expected clock=0 calls=0
+	mkdir -p "${work}"
+	command() {
+		[[ $* != '-v pidstat' ]] || return 1
+		builtin command "$@"
+	}
+	pidstat() { fatal "cAdvisor startup unexpectedly invoked pidstat"; }
+	allocate_available_port() { echo 20000; }
+	docker() {
+		case $1 in
+		inspect) [[ ${mode} == exited ]] && echo false || echo true ;;
+		logs) echo 'cAdvisor fixture log' ;;
+		esac
+		return 0
+	}
+	curl() {
+		calls=$((calls + 1))
+		printf '%s\n' "${calls}" > "${work}/${mode}.calls"
+		[[ ${mode} == immediate || (${mode} == delayed && ${calls} -gt 1) ]] && return 0
+		echo 'cAdvisor fixture health check failed' >&2
+		return 22
+	}
+	date() { printf '%s\n' "${clock}"; }
+	sleep() { clock=$((clock + 15)); }
+	for mode in immediate delayed timeout exited; do
+		status=0 expected=0 clock=0 calls=0
+		printf '0\n' > "${work}/${mode}.calls"
+		(cpu_reference_start "${work}/${mode}") > "${work}/${mode}.log" 2>&1 || status=$?
+		[[ ${mode} != timeout && ${mode} != exited ]] || expected=1
+		assert_eq "${status}" "${expected}" "${mode}: cAdvisor readiness without pidstat"
+		case ${mode} in
+		immediate) expected=1 ;;
+		delayed | timeout) expected=2 ;;
+		exited) expected=0 ;;
+		esac
+		assert_eq "$(< "${work}/${mode}.calls")" "${expected}" "${mode}: health check attempts"
+	done
+	grep -Fq 'cAdvisor fixture log' "${work}/exited/reference/cadvisor.log" \
+		|| fatal "cAdvisor startup exit omitted container logs"
+	grep -Fq 'cAdvisor fixture log' "${work}/timeout/reference/cadvisor.log" \
+		|| fatal "cAdvisor readiness timeout omitted container logs"
+	grep -Fq 'health check failed' "${work}/timeout/reference/ready.err" \
+		|| fatal "cAdvisor readiness timeout omitted the latest health error"
+	status=0
+	(cpu_reference_prepare_pidstat) > "${work}/missing-pidstat.log" 2>&1 || status=$?
+	assert_eq "${status}" 77 "worker CPU sampling requires pidstat"
+	grep -Fq 'command is not installed: pidstat' "${work}/missing-pidstat.log" \
+		|| fatal "missing pidstat skip omitted the dependency name"
+)
+
 assert_cpu_reference_window() (
 	source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
 	local work="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-reference-window" mode calls status expected end clock=0
@@ -387,5 +439,6 @@ assert_process_shutdown graceful_failure 7
 assert_process_shutdown forced 137
 assert_process_shutdown custom_signal 0 USR2
 assert_helper_port_allocation
+assert_cpu_reference_startup
 assert_cpu_reference_window
 log_info "framework logging, assertions, HTTP diagnostics, service addresses, process shutdown and port allocation passed"

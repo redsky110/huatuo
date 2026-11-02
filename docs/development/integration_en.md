@@ -88,7 +88,8 @@ CPU cases run serially and target a Kubernetes VM with 4 CPUs and 8 GB of memory
 They require access to the local kubelet API; set `KUBELET_CERT` and `KUBELET_KEY`
 to its client certificate and key.
 
-Install `stress-ng` and `sysstat` for local runs; the VM workflow installs them.
+Install `stress-ng` for local runs. CPU util/stat worker reference measurements
+also require `sysstat`; the VM workflow installs both packages.
 The Kubernetes runtime must be able to pull workload images. CPU reference
 collection, cpuidle and dload also require Docker and access to their images.
 Run `make build` beforehand; test execution does not need a Go compiler.
