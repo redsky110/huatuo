@@ -319,7 +319,7 @@ assert_helper_port_allocation() (
 
 assert_cpu_reference_window() (
 	source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
-	local work="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-reference-window" mode calls status expected end
+	local work="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-reference-window" mode calls status expected end clock=0
 	mkdir -p "${work}"
 	CPU_REFERENCE_URL=http://fixture
 	end=$(jq -n '"2026-01-01T00:00:10Z" | fromdateiso8601')
@@ -338,8 +338,9 @@ assert_cpu_reference_window() (
 			cp "${work}/fixture-stale.json" "${@: -1}"
 		fi
 	}
-	# Advance the retry deadline without making the framework test wait 30 seconds.
-	sleep() { SECONDS=$((SECONDS + 15)); }
+	# Advance the shared polling clock without waiting 30 seconds in this fixture.
+	date() { printf '%s\n' "${clock}"; }
+	sleep() { clock=$((clock + 15)); }
 	for mode in default fresh delayed timeout; do
 		calls=0 status=0 expected=0
 		if [[ ${mode} == default ]]; then

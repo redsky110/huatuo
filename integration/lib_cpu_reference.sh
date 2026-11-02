@@ -37,20 +37,19 @@ cpu_reference_start() {
 		--enable_metrics=cpu,cpuset --docker_only=true \
 		--raw_cgroup_prefix_whitelist=/kubepods,/kubepods.slice \
 		> "${CPU_REFERENCE_DIR}/container-id"
-	local deadline=$((SECONDS + 30))
-	while ((SECONDS < deadline)); do
-		if [[ $(docker inspect --format '{{.State.Running}}' "${cpu_reference_container}") != true ]]; then
-			docker logs "${cpu_reference_container}" > "${CPU_REFERENCE_DIR}/cadvisor.log" 2>&1
-			cat "${CPU_REFERENCE_DIR}/cadvisor.log" >&2
-			fatal "cAdvisor exited before readiness; inspect ${CPU_REFERENCE_DIR}/cadvisor.log"
-		fi
-		if cpu_reference_ready; then return 0; fi
-		sleep 1
-	done
-	fatal "cAdvisor did not become ready; inspect ${CPU_REFERENCE_DIR}"
+	wait_until 30 1 cpu_reference_ready || {
+		docker logs "${cpu_reference_container}" > "${CPU_REFERENCE_DIR}/cadvisor.log" 2>&1
+		cat "${CPU_REFERENCE_DIR}/cadvisor.log" >&2
+		fatal "cAdvisor did not become ready; inspect ${CPU_REFERENCE_DIR}/ready.err and ${CPU_REFERENCE_DIR}/cadvisor.log"
+	}
 }
 
 cpu_reference_ready() {
+	if [[ $(docker inspect --format '{{.State.Running}}' "${cpu_reference_container}") != true ]]; then
+		docker logs "${cpu_reference_container}" > "${CPU_REFERENCE_DIR}/cadvisor.log" 2>&1
+		cat "${CPU_REFERENCE_DIR}/cadvisor.log" >&2
+		fatal "cAdvisor exited before readiness; inspect ${CPU_REFERENCE_DIR}/cadvisor.log"
+	fi
 	curl --noproxy '*' -fsS --max-time 3 "${CPU_REFERENCE_URL}/healthz" > /dev/null 2> "${CPU_REFERENCE_DIR}/ready.err"
 }
 
@@ -75,23 +74,23 @@ cpu_reference_name() {
 }
 
 cpu_reference_stats() {
-	local path=$1 output=$2 window_end=${3:-0} name deadline=$((SECONDS + 30))
+	local path=$1 output=$2 window_end=${3:-0} name
 	name=$(cpu_reference_name "${path}") || return 1
-	while ((SECONDS < deadline)); do
-		if curl --noproxy '*' -fsS --max-time 5 \
-			"${CPU_REFERENCE_URL}/api/v2.0/stats${name}?type=name&recursive=false&count=64&max_age=0s" \
-			-o "${output}.response" 2> "${output}.err" \
-			&& jq -e --arg name "${name}" --argjson window_end "${window_end}" "${CPU_REFERENCE_JQ}"'
-			 .[$name] | select(length >= 2) | sort_by(.timestamp) |
-			 if (.[-1].timestamp | epoch) >= $window_end then .
-			 else error("latest cAdvisor sample " + .[-1].timestamp + " precedes window end " + ($window_end|tostring)) end
-			' "${output}.response" > "${output}" 2>> "${output}.err"; then
-			return 0
-		fi
-		sleep 1
-	done
+	wait_until 30 1 cpu_reference_stats_ready "${name}" "${output}" "${window_end}" && return 0
 	echo "cAdvisor CPU samples for ${name} did not cover window end ${window_end}; inspect ${output}.response and ${output}.err" >&2
 	return 1
+}
+
+cpu_reference_stats_ready() {
+	local name=$1 output=$2 window_end=$3
+	curl --noproxy '*' -fsS --max-time 5 \
+		"${CPU_REFERENCE_URL}/api/v2.0/stats${name}?type=name&recursive=false&count=64&max_age=0s" \
+		-o "${output}.response" 2> "${output}.err" \
+		&& jq -e --arg name "${name}" --argjson window_end "${window_end}" "${CPU_REFERENCE_JQ}"'
+		 .[$name] | select(length >= 2) | sort_by(.timestamp) |
+		 if (.[-1].timestamp | epoch) >= $window_end then .
+		 else error("latest cAdvisor sample " + .[-1].timestamp + " precedes window end " + ($window_end|tostring)) end
+		' "${output}.response" > "${output}" 2>> "${output}.err"
 }
 
 # Timestamp conversion preserves the fractional part used by subsecond samples.
