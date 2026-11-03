@@ -94,9 +94,10 @@ The Kubernetes runtime must be able to pull workload images. CPU reference
 collection, cpuidle and dload also require Docker and access to their images.
 Run `make build` beforehand; test execution does not need a Go compiler.
 
-cpu_util, cpu_stat and runqlat support cgroup v1/v2. cpu_stat temporarily changes
-`kernel.sched_schedstats` and restores its original value. Optional `wait_sum_percent` and
-burst checks run only when the kernel exports the corresponding counters.
+cpu_util, cpu_stat and runqlat support cgroup v1/v2. When available, cpu_stat
+temporarily changes `kernel.sched_schedstats` and restores its original value.
+Missing schedstats control skips only the toggle and contention subcases.
+Optional `wait_sum_percent` and burst checks require the corresponding kernel counters.
 Runqlat requires scheduling tracepoints and the `free_fair_sched_group` kprobe;
 cpuidle requires permission to load the perf BPF program.
 

@@ -24,14 +24,14 @@ source "${ROOT_DIR}/e2e/lib_cpu_load.sh"
 source "${ROOT_DIR}/integration/lib_cpu_metrics.sh"
 source "${ROOT_DIR}/integration/lib_cpu_reference.sh"
 
-require_commands kubectl jq findmnt ss sysctl taskset getconf
-require_readable "${KUBELET_CERT}" "${KUBELET_KEY}" /proc/sys/kernel/sched_schedstats
+require_commands kubectl jq findmnt ss taskset getconf
+require_readable "${KUBELET_CERT}" "${KUBELET_KEY}"
 readonly CPU_STAT_DIR="${HUATUO_BAMAI_TEST_TMPDIR}/cpu-stat"
 readonly CPU_STAT_LOAD="${CPU_STAT_DIR}/cpu-load"
 readonly CPU_STAT_NS="${BUSINESS_POD_NS}"
 readonly CPU_STAT_PREFIX="cpu-stat-${BASHPID}-${RANDOM}"
 readonly CPU_STAT_LABEL="app=${CPU_STAT_PREFIX}"
-readonly CPU_STAT_SCHEDSTATS=$(sysctl -n kernel.sched_schedstats)
+cpu_stat_schedstats_original=""
 cpu_stat_disabled=false
 cpu_stat_wait=false
 cpu_stat_host_pid=""
@@ -58,8 +58,10 @@ cpu_stat_cleanup() {
 		--ignore-not-found --timeout=30s || status=1
 	cpu_reference_stop || status=1
 	huatuo_bamai_stop || status=1
-	sysctl -q -w "kernel.sched_schedstats=${CPU_STAT_SCHEDSTATS}" || status=1
-	[[ $(sysctl -n kernel.sched_schedstats) == "${CPU_STAT_SCHEDSTATS}" ]] || status=1
+	if [[ -n ${cpu_stat_schedstats_original} ]]; then
+		sysctl -q -w "kernel.sched_schedstats=${cpu_stat_schedstats_original}" || status=1
+		[[ $(sysctl -n kernel.sched_schedstats) == "${cpu_stat_schedstats_original}" ]] || status=1
+	fi
 	exit "${status}"
 }
 trap cpu_stat_cleanup EXIT
@@ -101,7 +103,7 @@ CPU_STAT_KUBELET_PORT=${KUBELET_PODS_API##*:}
 CPU_STAT_KUBELET_PORT=${CPU_STAT_KUBELET_PORT%%/*}
 readonly CPU_STAT_NODE CPU_STAT_CPU CPU_STAT_CPUS CPU_STAT_V2 CPU_STAT_WEIGHT_FILE
 readonly CPU_STAT_CPU_ROOT CPU_STAT_USAGE_ROOT CPU_STAT_CPUSET_ROOT CPU_STAT_PORT CPU_STAT_KUBELET_PORT
-log_info "cpu_stat: cgroup_v2=${CPU_STAT_V2} CPU=${CPU_STAT_CPU} schedstats_original=${CPU_STAT_SCHEDSTATS}"
+log_info "cpu_stat: cgroup_v2=${CPU_STAT_V2} CPU=${CPU_STAT_CPU}"
 
 if [[ -f ${HUATUO_BAMAI_TEST_TMPDIR}/huatuo.log ]]; then
 	huatuo_bamai_stop
@@ -395,22 +397,32 @@ cpu_stat_restart_daemon
 readonly CPU_STAT_POD_A="${CPU_STAT_PREFIX}-a" CPU_STAT_POD_B="${CPU_STAT_PREFIX}-b"
 cpu_stat_create "${CPU_STAT_POD_A}" 2
 cpu_stat_command "${CPU_STAT_POD_A}" user 1000
-sysctl -q -w kernel.sched_schedstats=0
-[[ $(sysctl -n kernel.sched_schedstats) == 0 ]] || fatal "cannot disable schedstats"
-cpu_stat_single_phase schedstats-disabled 100 -1
-
-sysctl -q -w kernel.sched_schedstats=1
-[[ $(sysctl -n kernel.sched_schedstats) == 1 ]] || fatal "cannot enable schedstats"
 cpu_stat_a_cpu=$(jq -r '.CPUPath' "${CPU_STAT_DIR}/${CPU_STAT_POD_A}-target.json")
-cp "${cpu_stat_a_cpu}/cpu.stat" "${CPU_STAT_DIR}/schedstats-enabled.stat"
-if grep -q '^wait_sum ' "${cpu_stat_a_cpu}/cpu.stat"; then
-	cpu_stat_wait=true
-else
-	log_warn "SKIP subcases: kernel cpu.stat does not export wait_sum with schedstats enabled; contention percentages cannot be tested"
-fi
-cpu_stat_single_phase schedstats-enabled 100 0
+if [[ -r /proc/sys/kernel/sched_schedstats && -w /proc/sys/kernel/sched_schedstats ]] && command -v sysctl > /dev/null; then
+	cpu_stat_schedstats_original=$(sysctl -n kernel.sched_schedstats)
+	log_info "cpu_stat: schedstats_original=${cpu_stat_schedstats_original}"
+	sysctl -q -w kernel.sched_schedstats=0
+	[[ $(sysctl -n kernel.sched_schedstats) == 0 ]] || fatal "cannot disable schedstats"
+	cpu_stat_single_phase schedstats-disabled 100 -1
 
-if [[ ${cpu_stat_wait} == true ]]; then
+	sysctl -q -w kernel.sched_schedstats=1
+	[[ $(sysctl -n kernel.sched_schedstats) == 1 ]] || fatal "cannot enable schedstats"
+	cp "${cpu_stat_a_cpu}/cpu.stat" "${CPU_STAT_DIR}/schedstats-enabled.stat"
+	if grep -q '^wait_sum ' "${cpu_stat_a_cpu}/cpu.stat"; then
+		cpu_stat_wait=true
+	else
+		log_warn "SKIP subcases: kernel cpu.stat does not export wait_sum with schedstats enabled; contention percentages cannot be tested"
+	fi
+	cpu_stat_single_phase schedstats-enabled 100 0
+else
+	log_warn "SKIP subcases: kernel.sched_schedstats control is unavailable; schedstats toggles and contention percentages cannot be tested"
+	if grep -q '^wait_sum ' "${cpu_stat_a_cpu}/cpu.stat"; then
+		cpu_stat_wait=true
+	fi
+	cpu_stat_single_phase baseline 100 -1
+fi
+
+if [[ -n ${cpu_stat_schedstats_original} && ${cpu_stat_wait} == true ]]; then
 	cpu_load_prepare_host "${CPU_STAT_DIR}"
 	cpu_stat_command host idle 0
 	# user.slice and kubepods may have unequal weights. The owned host group

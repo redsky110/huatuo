@@ -66,9 +66,10 @@ Kubernetes 运行时需要能拉取负载镜像；CPU 参考采集、cpuidle 和
 还需要 Docker 及其测试镜像的访问权限。提前执行 `make build`，
 测试运行时不需要 Go 编译器。
 
-cpu_util、cpu_stat 和 runqlat 支持 cgroup v1/v2。cpu_stat 会临时切换
-`kernel.sched_schedstats` 并恢复原值；仅在内核导出相应计数时执行可选的
-`wait_sum_percent` 和 burst 检查。runqlat 要求对应调度 tracepoint 和
+cpu_util、cpu_stat 和 runqlat 支持 cgroup v1/v2。控制项可用时，cpu_stat 会临时切换
+`kernel.sched_schedstats` 并恢复原值；缺少该控制项只跳过开关和争抢子场景。
+仅在内核导出相应计数时执行可选的 `wait_sum_percent` 和 burst 检查。
+runqlat 要求对应调度 tracepoint 和
 `free_fair_sched_group` kprobe 可用；cpuidle 要求可加载 perf BPF 程序。
 
 dload 功能场景需要 Legacy cgroup、taskstats、dm-delay、`dmsetup`、
