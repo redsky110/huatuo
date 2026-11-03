@@ -375,8 +375,8 @@ assert_cpu_reference_window() (
 	mkdir -p "${work}"
 	CPU_REFERENCE_URL=http://fixture
 	end=$(jq -n '"2026-01-01T00:00:10Z" | fromdateiso8601')
-	jq -n --argjson end "${end}" '
-	 {"/fixture": [range(0; 10) | {timestamp: ($end-10+. | todateiso8601),
+	jq -n --argjson window_end "${end}" '
+	 {"/fixture": [range(0; 10) | {timestamp: ($window_end-10+. | todateiso8601),
 	  cpu_inst: {usage: {user: 200000000, system: 300000000, total: 500000000}}}]}
 	' > "${work}/fixture-stale.json"
 	jq '."/fixture" += [(."/fixture"[-1] | .timestamp = "2026-01-01T00:00:10.125Z")]' \
