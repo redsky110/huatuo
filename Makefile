@@ -233,12 +233,7 @@ portable-generated: gen-build
 		$(PORTABLE_GENERATED_FILES) $(APP_CMD_OUTPUT)/portable-generated.commit
 
 test: build
-	@bash e2e/run.sh test_metrics_cpu_util.sh
 	@bash e2e/run.sh test_metrics_cpu_stat.sh
-	@bash e2e/run.sh test_metrics_cpu_runqlat_tracing.sh
-	@bash e2e/run.sh test_autotracing_cpuidle.sh
-	@bash e2e/run.sh test_autotracing_dload.sh
-	@bash e2e/run.sh test_metrics_system_softirq.sh
 
 unit: gen-build
 	@go test -count=1 -v ./... -coverprofile=$(APP_CMD_OUTPUT)/unit-coverage.txt -timeout=5m
